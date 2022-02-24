@@ -133,37 +133,49 @@ pub struct MinimaxFrame {
     remaining_answers: Vec<Word>,
 }
 
+fn merge_min(min: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
+    let swap = min.as_ref().map_or(true, |min| min.score > new.score);
+    if swap {
+        *min = Some(new);
+    }
+}
+
+fn merge_max(max: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
+    let swap = max.as_ref().map_or(true, |max| max.score < new.score);
+    if swap {
+        *max = Some(new);
+    }
+}
+
 pub fn minimax(depth: usize, possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxTrace {
     if depth == 0 {
         return heuristic(possible_guesses, possible_answers);
     }
     let len = possible_guesses.len();
-    let mut i = 0;
-    possible_guesses
-        .into_iter()
-        .map(|&guess| {
-            let possible_responses = bucket_answers_by_response(guess, possible_answers);
-            possible_responses
-                .into_iter()
-                .map(|(response, remaining_answers)| {
-                    let mut child_frames = minimax(depth - 1, possible_guesses, &remaining_answers);
-                    let new_frame = MinimaxFrame {
-                        guess,
-                        response,
-                        remaining_answers,
-                    };
-                    child_frames.push(new_frame);
-                    child_frames
-                })
-                .max_by_key(|child_frames| child_frames.score)
-                .unwrap()
-        })
-        .inspect(|_| {
-            i += 1;
-            println!("{}/{}", i, len);
-        })
-        .min_by_key(|child_frames| child_frames.score)
-        .unwrap()
+    let mut min_trace: Option<MinimaxTrace> = None;
+    'find_guess: for (i, &guess) in possible_guesses.into_iter().enumerate() {
+        println!("{}/{}", i, len);
+        let possible_responses = bucket_answers_by_response(guess, possible_answers);
+        let mut max_trace = None;
+        for (response, remaining_answers) in possible_responses {
+            let mut child_frames = minimax(depth - 1, possible_guesses, &remaining_answers);
+            let new_frame = MinimaxFrame {
+                guess,
+                response,
+                remaining_answers,
+            };
+            child_frames.push(new_frame);
+            if let Some(min_trace) = min_trace.as_ref() {
+                if child_frames.score > min_trace.score {
+                    println!("pruned!");
+                    continue 'find_guess;
+                }
+            }
+            merge_max(&mut max_trace, child_frames);
+        }
+        merge_min(&mut min_trace, max_trace.unwrap());
+    }
+    min_trace.unwrap()
 }
 
 pub fn heuristic(possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxTrace {
