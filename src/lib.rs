@@ -147,59 +147,61 @@ fn merge_max(max: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
     }
 }
 
-pub fn minimax(depth: usize, possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxTrace {
+pub fn minimax(
+    depth: usize,
+    possible_guesses: &[Word],
+    possible_answers: &[Word],
+    min_min: Option<usize>,
+    verbose: bool,
+) -> Option<MinimaxTrace> {
     if depth == 0 {
-        return heuristic(possible_guesses, possible_answers);
+        return Some(MinimaxTrace {
+            frames: Vec::new(),
+            score: possible_answers.len(),
+        });
     }
     let len = possible_guesses.len();
     let mut min_trace: Option<MinimaxTrace> = None;
     'find_guess: for (i, &guess) in possible_guesses.into_iter().enumerate() {
-        println!("{}/{}", i, len);
+        if verbose {
+            println!("{}/{}", i, len);
+        }
         let possible_responses = bucket_answers_by_response(guess, possible_answers);
         let mut max_trace = None;
         for (response, remaining_answers) in possible_responses {
-            let mut child_frames = minimax(depth - 1, possible_guesses, &remaining_answers);
+            let child_trace_option =
+                minimax(depth - 1, possible_guesses, &remaining_answers, None, false);
+            let mut child_trace = if let Some(tr) = child_trace_option {
+                tr
+            } else {
+                continue;
+            };
             let new_frame = MinimaxFrame {
                 guess,
                 response,
                 remaining_answers,
             };
-            child_frames.push(new_frame);
+            child_trace.push(new_frame);
             if let Some(min_trace) = min_trace.as_ref() {
-                if child_frames.score > min_trace.score {
-                    println!("pruned!");
+                if child_trace.score > min_trace.score {
+                    if verbose {
+                        println!("pruned!");
+                    }
                     continue 'find_guess;
                 }
             }
-            merge_max(&mut max_trace, child_frames);
+            merge_max(&mut max_trace, child_trace);
         }
-        merge_min(&mut min_trace, max_trace.unwrap());
-    }
-    min_trace.unwrap()
-}
-
-pub fn heuristic(possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxTrace {
-    possible_guesses
-        .into_iter()
-        .map(|&guess| {
-            let possible_responses = bucket_answers_by_response(guess, possible_answers);
-            let (response, remaining_answers) = possible_responses
-                .into_iter()
-                .max_by_key(|(_, answers)| answers.len())
-                .unwrap();
-            let score = remaining_answers.len();
-            let frame = MinimaxFrame {
-                guess,
-                response,
-                remaining_answers,
-            };
-            MinimaxTrace {
-                frames: vec![frame],
-                score,
+        if let Some(max_trace) = max_trace {
+            if let Some(min_min) = min_min {
+                if max_trace.score <= min_min {
+                    return None;
+                }
             }
-        })
-        .min_by_key(|trace| trace.score)
-        .unwrap()
+            merge_min(&mut min_trace, max_trace);
+        }
+    }
+    min_trace
 }
 
 #[cfg(test)]

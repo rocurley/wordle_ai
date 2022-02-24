@@ -5,7 +5,7 @@ use wordle_ai_lib::{minimax, Word};
 fn main() {
     let guesses = read_words("guesses.txt");
     let answers = read_words("answers.txt");
-    dbg!(minimax(1, &guesses, &answers));
+    dbg!(minimax(2, &guesses, &answers, None, true));
 }
 
 fn read_words(path: &str) -> Vec<Word> {
