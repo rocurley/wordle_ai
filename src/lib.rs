@@ -114,11 +114,16 @@ fn bucket_answers_by_response(
     out
 }
 
-// TODO: Move score out of MinimaxFrame and use this.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct MinimaxTrace {
     frames: Vec<MinimaxFrame>,
     score: usize,
+}
+
+impl MinimaxTrace {
+    fn push(&mut self, frame: MinimaxFrame) {
+        self.frames.push(frame);
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -126,17 +131,11 @@ pub struct MinimaxFrame {
     guess: Word,
     response: Response,
     remaining_answers: Vec<Word>,
-    score: usize,
 }
 
-pub fn minimax(
-    depth: usize,
-    possible_guesses: &[Word],
-    possible_answers: &[Word],
-) -> Vec<MinimaxFrame> {
+pub fn minimax(depth: usize, possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxTrace {
     if depth == 0 {
-        let frame = heuristic(possible_guesses, possible_answers);
-        return vec![frame];
+        return heuristic(possible_guesses, possible_answers);
     }
     let len = possible_guesses.len();
     let mut i = 0;
@@ -152,23 +151,22 @@ pub fn minimax(
                         guess,
                         response,
                         remaining_answers,
-                        score: child_frames.last().unwrap().score,
                     };
                     child_frames.push(new_frame);
                     child_frames
                 })
-                .max_by_key(|child_frames| child_frames.last().unwrap().score)
+                .max_by_key(|child_frames| child_frames.score)
                 .unwrap()
         })
         .inspect(|_| {
             i += 1;
             println!("{}/{}", i, len);
         })
-        .min_by_key(|child_frames| child_frames.last().unwrap().score)
+        .min_by_key(|child_frames| child_frames.score)
         .unwrap()
 }
 
-pub fn heuristic(possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxFrame {
+pub fn heuristic(possible_guesses: &[Word], possible_answers: &[Word]) -> MinimaxTrace {
     possible_guesses
         .into_iter()
         .map(|&guess| {
@@ -178,14 +176,17 @@ pub fn heuristic(possible_guesses: &[Word], possible_answers: &[Word]) -> Minima
                 .max_by_key(|(_, answers)| answers.len())
                 .unwrap();
             let score = remaining_answers.len();
-            MinimaxFrame {
+            let frame = MinimaxFrame {
                 guess,
                 response,
                 remaining_answers,
+            };
+            MinimaxTrace {
+                frames: vec![frame],
                 score,
             }
         })
-        .min_by_key(|frame| frame.score)
+        .min_by_key(|trace| trace.score)
         .unwrap()
 }
 
