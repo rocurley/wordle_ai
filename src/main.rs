@@ -7,7 +7,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let guesses = read_words(&args[1]);
     let answers = read_words(&args[2]);
-    dbg!(minimax(2, &guesses, &answers, None, false));
+    dbg!(minimax(2, &guesses, &answers, None, true));
 }
 
 fn read_words(path: &str) -> Vec<Word> {
