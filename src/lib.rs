@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Index};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,15 +57,51 @@ impl ResponseCell {
             ResponseCell::Wrong => '⬛',
         }
     }
+    fn from_int(x: u8) -> Option<Self> {
+        match x {
+            0 => Some(ResponseCell::Correct),
+            1 => Some(ResponseCell::Moved),
+            2 => Some(ResponseCell::Wrong),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Response([ResponseCell; 5]);
 
+impl Debug for ResponseInt {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(&Response::from_int(*self), f)
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResponseInt(u8);
+
 impl Debug for Response {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let s: String = self.0.into_iter().map(ResponseCell::emoji).collect();
         f.write_str(&s)
+    }
+}
+
+impl Response {
+    fn as_int(&self) -> ResponseInt {
+        ResponseInt(self.0.iter().fold(0, |i, &cell| i * 3 + cell as u8))
+    }
+    fn from_int(ResponseInt(mut x): ResponseInt) -> Self {
+        let mut out = [
+            ResponseCell::Correct,
+            ResponseCell::Correct,
+            ResponseCell::Correct,
+            ResponseCell::Correct,
+            ResponseCell::Correct,
+        ];
+        for i in 0..5 {
+            out[4 - i] = ResponseCell::from_int(x % 3).unwrap();
+            x /= 3;
+        }
+        Response(out)
     }
 }
 
@@ -117,6 +153,38 @@ fn check_guess(guess: Word, answer: Word) -> Response {
         }
     }
     Response(out)
+}
+
+pub struct ResponseLUT {
+    table: Vec<ResponseInt>,
+    n_answers: usize,
+}
+
+impl ResponseLUT {
+    pub fn new(guesses: &[Word], answers: &[Word]) -> Self {
+        let table = guesses
+            .iter()
+            .flat_map(|guess| {
+                answers
+                    .iter()
+                    .map(|answer| check_guess(*guess, *answer).as_int())
+            })
+            .collect();
+        let n_answers = answers.len();
+        ResponseLUT { table, n_answers }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuessIx(pub usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnswerIx(pub usize);
+
+impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
+    type Output = ResponseInt;
+    fn index(&self, (GuessIx(i), AnswerIx(j)): (GuessIx, AnswerIx)) -> &Self::Output {
+        &self.table[i * self.n_answers + j]
+    }
 }
 
 pub struct VecPool<T> {
@@ -177,12 +245,13 @@ impl<'a, T> IntoIterator for PoolVec<'a, T> {
 
 fn bucket_answers_by_response<'pool>(
     pools: &'pool AllPools<'pool>,
-    guess: Word,
-    possible_answers: &[Word],
-) -> PoolVec<'pool, (Response, PoolVec<'pool, Word>)> {
+    guess: GuessIx,
+    possible_answers: &[AnswerIx],
+    lut: &ResponseLUT,
+) -> PoolVec<'pool, (ResponseInt, PoolVec<'pool, AnswerIx>)> {
     let mut out = pools.buckets_pool.take_vec();
     for &answer in possible_answers {
-        let response = check_guess(guess, answer);
+        let response = lut[(guess, answer)];
         alist_get_or_else(&mut out, response, || pools.words_pool.take_vec()).push(answer);
     }
     out
@@ -202,9 +271,9 @@ impl<'pool> MinimaxTrace<'pool> {
 
 #[derive(Debug)]
 pub struct MinimaxFrame<'pool> {
-    guess: Word,
-    response: Response,
-    remaining_answers: PoolVec<'pool, Word>,
+    guess: GuessIx,
+    response: ResponseInt,
+    remaining_answers: PoolVec<'pool, AnswerIx>,
 }
 
 fn merge_min<'pool>(min: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'pool>) {
@@ -222,8 +291,8 @@ fn merge_max<'pool>(max: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'po
 }
 
 pub struct AllPools<'pool> {
-    buckets_pool: VecPool<(Response, PoolVec<'pool, Word>)>,
-    words_pool: VecPool<Word>,
+    buckets_pool: VecPool<(ResponseInt, PoolVec<'pool, AnswerIx>)>,
+    words_pool: VecPool<AnswerIx>,
     frames_pool: VecPool<MinimaxFrame<'pool>>,
 }
 
@@ -239,9 +308,10 @@ impl AllPools<'static> {
 
 pub fn minimax<'pool>(
     pools: &'pool AllPools<'pool>,
+    lut: &ResponseLUT,
     depth: usize,
-    possible_guesses: &[Word],
-    possible_answers: &[Word],
+    possible_guesses: &[GuessIx],
+    possible_answers: &[AnswerIx],
     min_min: Option<usize>,
     verbose: bool,
 ) -> Option<MinimaxTrace<'pool>> {
@@ -257,11 +327,12 @@ pub fn minimax<'pool>(
         if verbose {
             println!("{}/{}", i, len);
         }
-        let possible_responses = bucket_answers_by_response(pools, guess, possible_answers);
+        let possible_responses = bucket_answers_by_response(pools, guess, possible_answers, lut);
         let mut max_trace: Option<MinimaxTrace> = None;
         for (response, remaining_answers) in possible_responses {
             let child_trace_option = minimax(
                 pools,
+                lut,
                 depth - 1,
                 possible_guesses,
                 &remaining_answers,
@@ -340,5 +411,15 @@ mod tests {
             check_guess("abbey".parse().unwrap(), "abbey".parse().unwrap()),
             Response([Correct, Correct, Correct, Correct, Correct])
         );
+    }
+
+    #[test]
+    fn test_response_int_roundtrip() {
+        for i in 0..3u8.pow(5) {
+            let i = ResponseInt(i);
+            let response = Response::from_int(i);
+            let i2 = response.as_int();
+            assert_eq!(i, i2);
+        }
     }
 }
