@@ -135,7 +135,7 @@ impl<'a, T> VecPool<T> {
     }
 }
 
-struct PoolVec<'a, T> {
+pub struct PoolVec<'a, T> {
     pool: &'a VecPool<T>,
     vec: Vec<T>,
 }
@@ -167,22 +167,30 @@ impl<'a, T: Debug> Debug for PoolVec<'a, T> {
     }
 }
 
+impl<'a, T> IntoIterator for PoolVec<'a, T> {
+    type IntoIter = impl Iterator<Item = T>;
+    type Item = T;
+    fn into_iter(mut self) -> Self::IntoIter {
+        std::mem::replace(&mut self.vec, Vec::new()).into_iter()
+    }
+}
+
 fn bucket_answers_by_response<'pool>(
-    pool: &'pool VecPool<Word>,
+    pools: &'pool AllPools<'pool>,
     guess: Word,
     possible_answers: &[Word],
-) -> Vec<(Response, PoolVec<'pool, Word>)> {
-    let mut out = Vec::new();
+) -> PoolVec<'pool, (Response, PoolVec<'pool, Word>)> {
+    let mut out = pools.buckets_pool.take_vec();
     for &answer in possible_answers {
         let response = check_guess(guess, answer);
-        alist_get_or_else(&mut out, response, || pool.take_vec()).push(answer);
+        alist_get_or_else(&mut out, response, || pools.words_pool.take_vec()).push(answer);
     }
     out
 }
 
 #[derive(Debug)]
 pub struct MinimaxTrace<'pool> {
-    pub frames: Vec<MinimaxFrame<'pool>>,
+    pub frames: PoolVec<'pool, MinimaxFrame<'pool>>,
     pub score: usize,
 }
 
@@ -213,8 +221,24 @@ fn merge_max<'pool>(max: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'po
     }
 }
 
+pub struct AllPools<'pool> {
+    buckets_pool: VecPool<(Response, PoolVec<'pool, Word>)>,
+    words_pool: VecPool<Word>,
+    frames_pool: VecPool<MinimaxFrame<'pool>>,
+}
+
+impl AllPools<'static> {
+    pub fn new() -> &'static Self {
+        Box::leak(Box::new(AllPools {
+            words_pool: VecPool::new(),
+            buckets_pool: VecPool::new(),
+            frames_pool: VecPool::new(),
+        }))
+    }
+}
+
 pub fn minimax<'pool>(
-    words_pool: &'pool VecPool<Word>,
+    pools: &'pool AllPools<'pool>,
     depth: usize,
     possible_guesses: &[Word],
     possible_answers: &[Word],
@@ -223,7 +247,7 @@ pub fn minimax<'pool>(
 ) -> Option<MinimaxTrace<'pool>> {
     if depth == 0 {
         return Some(MinimaxTrace {
-            frames: Vec::new(),
+            frames: pools.frames_pool.take_vec(),
             score: possible_answers.len(),
         });
     }
@@ -233,11 +257,11 @@ pub fn minimax<'pool>(
         if verbose {
             println!("{}/{}", i, len);
         }
-        let possible_responses = bucket_answers_by_response(words_pool, guess, possible_answers);
+        let possible_responses = bucket_answers_by_response(pools, guess, possible_answers);
         let mut max_trace: Option<MinimaxTrace> = None;
         for (response, remaining_answers) in possible_responses {
             let child_trace_option = minimax(
-                words_pool,
+                pools,
                 depth - 1,
                 possible_guesses,
                 &remaining_answers,
