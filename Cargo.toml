@@ -13,6 +13,9 @@ path = "src/main.rs"
 name = "wordle_ai_lib"
 path = "src/lib.rs"
 
+[profile.release]
+debug = true
+
 [[bench]]
 name = "benchmark"
 harness = false

@@ -1,8 +1,9 @@
 #![feature(type_alias_impl_trait)]
 
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::ops::{Index, IndexMut};
+use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -128,11 +129,15 @@ impl<T> IntoIterator for ResponseMap<T> {
     }
 }
 
-fn alist_get_or_insert<K: Eq, V>(alist: &mut Vec<(K, V)>, target: K, default: V) -> &mut V {
+fn alist_get_or_else<K: Eq, V, F: FnOnce() -> V>(
+    alist: &mut Vec<(K, V)>,
+    target: K,
+    default: F,
+) -> &mut V {
     match alist.iter().position(|(k, _)| *k == target) {
         Some(i) => &mut alist[i].1,
         None => {
-            alist.push((target, default));
+            alist.push((target, default()));
             &mut alist.last_mut().unwrap().1
         }
     }
@@ -174,58 +179,108 @@ fn check_guess(guess: Word, answer: Word) -> Response {
     Response(out)
 }
 
-fn bucket_answers_by_response(
+pub struct VecPool<T> {
+    vecs: RefCell<Vec<Vec<T>>>,
+}
+
+impl<'a, T> VecPool<T> {
+    fn take_vec(&'a self) -> PoolVec<T> {
+        let vec = self.vecs.borrow_mut().pop().unwrap_or_else(Vec::new);
+        PoolVec { pool: self, vec }
+    }
+    pub fn new() -> Self {
+        VecPool {
+            vecs: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+struct PoolVec<'a, T> {
+    pool: &'a VecPool<T>,
+    vec: Vec<T>,
+}
+
+impl<'a, T> Drop for PoolVec<'a, T> {
+    fn drop(&mut self) {
+        let mut vec = std::mem::replace(&mut self.vec, Vec::new());
+        vec.clear();
+        self.pool.vecs.borrow_mut().push(vec);
+    }
+}
+
+impl<'a, T> Deref for PoolVec<'a, T> {
+    type Target = Vec<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.vec
+    }
+}
+
+impl<'a, T> DerefMut for PoolVec<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.vec
+    }
+}
+
+impl<'a, T: Debug> Debug for PoolVec<'a, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Debug::fmt(self.deref(), f)
+    }
+}
+
+fn bucket_answers_by_response<'pool>(
+    pool: &'pool VecPool<Word>,
     guess: Word,
     possible_answers: &[Word],
-) -> Vec<(Response, Vec<Word>)> {
+) -> Vec<(Response, PoolVec<'pool, Word>)> {
     let mut out = Vec::new();
     for &answer in possible_answers {
         let response = check_guess(guess, answer);
-        alist_get_or_insert(&mut out, response, Vec::new()).push(answer);
+        alist_get_or_else(&mut out, response, || pool.take_vec()).push(answer);
     }
     out
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct MinimaxTrace {
-    frames: Vec<MinimaxFrame>,
-    score: usize,
+#[derive(Debug)]
+pub struct MinimaxTrace<'pool> {
+    pub frames: Vec<MinimaxFrame<'pool>>,
+    pub score: usize,
 }
 
-impl MinimaxTrace {
-    fn push(&mut self, frame: MinimaxFrame) {
+impl<'pool> MinimaxTrace<'pool> {
+    fn push(&mut self, frame: MinimaxFrame<'pool>) {
         self.frames.push(frame);
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct MinimaxFrame {
+#[derive(Debug)]
+pub struct MinimaxFrame<'pool> {
     guess: Word,
     response: Response,
-    remaining_answers: Vec<Word>,
+    remaining_answers: PoolVec<'pool, Word>,
 }
 
-fn merge_min(min: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
+fn merge_min<'pool>(min: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'pool>) {
     let swap = min.as_ref().map_or(true, |min| min.score > new.score);
     if swap {
-        *min = Some(new);
+        min.replace(new);
     }
 }
 
-fn merge_max(max: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
+fn merge_max<'pool>(max: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'pool>) {
     let swap = max.as_ref().map_or(true, |max| max.score < new.score);
     if swap {
-        *max = Some(new);
+        max.replace(new);
     }
 }
 
-pub fn minimax(
+pub fn minimax<'pool>(
+    words_pool: &'pool VecPool<Word>,
     depth: usize,
     possible_guesses: &[Word],
     possible_answers: &[Word],
     min_min: Option<usize>,
     verbose: bool,
-) -> Option<MinimaxTrace> {
+) -> Option<MinimaxTrace<'pool>> {
     if depth == 0 {
         return Some(MinimaxTrace {
             frames: Vec::new(),
@@ -238,11 +293,17 @@ pub fn minimax(
         if verbose {
             println!("{}/{}", i, len);
         }
-        let possible_responses = bucket_answers_by_response(guess, possible_answers);
-        let mut max_trace = None;
+        let possible_responses = bucket_answers_by_response(words_pool, guess, possible_answers);
+        let mut max_trace: Option<MinimaxTrace> = None;
         for (response, remaining_answers) in possible_responses {
-            let child_trace_option =
-                minimax(depth - 1, possible_guesses, &remaining_answers, None, false);
+            let child_trace_option = minimax(
+                words_pool,
+                depth - 1,
+                possible_guesses,
+                &remaining_answers,
+                None,
+                false,
+            );
             let mut child_trace = if let Some(tr) = child_trace_option {
                 tr
             } else {
