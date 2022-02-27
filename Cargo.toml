@@ -13,4 +13,11 @@ path = "src/main.rs"
 name = "wordle_ai_lib"
 path = "src/lib.rs"
 
+[[bench]]
+name = "benchmark"
+harness = false
+
 [dependencies]
+
+[dev-dependencies]
+iai = "0.1"
