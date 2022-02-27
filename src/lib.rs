@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
-use std::ops::{Deref, DerefMut, Index, IndexMut};
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,75 +57,15 @@ impl ResponseCell {
             ResponseCell::Wrong => '⬛',
         }
     }
-    fn from_int(x: usize) -> Option<Self> {
-        match x {
-            0 => Some(ResponseCell::Correct),
-            1 => Some(ResponseCell::Moved),
-            2 => Some(ResponseCell::Wrong),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Response([ResponseCell; 5]);
 
-impl Response {
-    fn as_int(&self) -> usize {
-        self.0.iter().fold(0, |i, &cell| i * 3 + cell as usize)
-    }
-    fn from_int(mut x: usize) -> Self {
-        let mut out = [
-            ResponseCell::Correct,
-            ResponseCell::Correct,
-            ResponseCell::Correct,
-            ResponseCell::Correct,
-            ResponseCell::Correct,
-        ];
-        for i in 0..5 {
-            out[4 - i] = ResponseCell::from_int(x % 3).unwrap();
-            x /= 3;
-        }
-        Response(out)
-    }
-}
-
 impl Debug for Response {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let s: String = self.0.into_iter().map(ResponseCell::emoji).collect();
         f.write_str(&s)
-    }
-}
-
-struct ResponseMap<T>(Vec<T>);
-
-impl<T> Index<Response> for ResponseMap<T> {
-    type Output = T;
-    fn index(&self, index: Response) -> &Self::Output {
-        &self.0[index.as_int()]
-    }
-}
-
-impl<T> IndexMut<Response> for ResponseMap<T> {
-    fn index_mut(&mut self, index: Response) -> &mut Self::Output {
-        &mut self.0[index.as_int()]
-    }
-}
-
-impl<T: Clone> ResponseMap<T> {
-    fn new_cloned(init: T) -> ResponseMap<T> {
-        ResponseMap(vec![init; 3usize.pow(5)])
-    }
-}
-
-impl<T> IntoIterator for ResponseMap<T> {
-    type Item = (Response, T);
-    type IntoIter = impl Iterator<Item = Self::Item>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0
-            .into_iter()
-            .enumerate()
-            .map(|(i, x)| (Response::from_int(i), x))
     }
 }
 
@@ -376,14 +316,5 @@ mod tests {
             check_guess("abbey".parse().unwrap(), "abbey".parse().unwrap()),
             Response([Correct, Correct, Correct, Correct, Correct])
         );
-    }
-
-    #[test]
-    fn test_response_int_roundtrip() {
-        for i in 0..3usize.pow(5) {
-            let response = Response::from_int(i);
-            let i2 = response.as_int();
-            assert_eq!(i, i2);
-        }
     }
 }
