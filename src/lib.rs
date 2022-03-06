@@ -1,10 +1,13 @@
 #![feature(type_alias_impl_trait)]
+#![feature(portable_simd)]
 
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, DerefMut, Index};
+use std::simd::{mask8x8, u8x8};
 use std::str::FromStr;
+mod simd_word;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Letter(u8);
@@ -87,7 +90,7 @@ impl Debug for Response {
 
 impl Response {
     fn as_int(&self) -> ResponseInt {
-        ResponseInt(self.0.iter().fold(0, |i, &cell| i * 3 + cell as u8))
+        ResponseInt(self.0.iter().fold(0, |acc, &cell| acc * 3 + cell as u8))
     }
     fn from_int(ResponseInt(mut x): ResponseInt) -> Self {
         let mut out = [
@@ -185,6 +188,64 @@ impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
     fn index(&self, (GuessIx(i), AnswerIx(j)): (GuessIx, AnswerIx)) -> &Self::Output {
         &self.table[i * self.n_answers + j]
     }
+}
+
+struct SimdWord(u8x8);
+impl SimdWord {
+    fn from_word(word: Word) -> Self {
+        let Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)]) = word;
+        SimdWord(u8x8::from_array([l0, l1, l2, l3, l4, 0, 0, 0]))
+    }
+    fn to_word(self) -> Word {
+        let &[l0, l1, l2, l3, l4, _, _, _] = self.0.as_array();
+        Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)])
+    }
+}
+
+fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
+    const POW_3: u8x8 = u8x8::from_array([
+        3u8.pow(4),
+        3u8.pow(3),
+        3u8.pow(2),
+        3u8.pow(1),
+        3u8.pow(0),
+        0,
+        0,
+        0,
+    ]);
+    const POW_3X2: u8x8 = u8x8::from_array([
+        2 * 3u8.pow(4),
+        2 * 3u8.pow(3),
+        2 * 3u8.pow(2),
+        2 * 3u8.pow(1),
+        2 * 3u8.pow(0),
+        2 * 0,
+        0,
+        0,
+    ]);
+
+    const ZERO: u8x8 = u8x8::splat(0);
+
+    // Refers to both guess and answer
+    let correct = guess.0.lanes_eq(answer.0);
+    // refers to guess
+    let mut used = correct;
+    // Refers to guess
+    let mut moved = mask8x8::splat(false);
+    // i refers to answer
+    for i in 0..5 {
+        if correct.test(i) {
+            continue;
+        }
+        let matches = u8x8::splat(answer.0.as_array()[i]).lanes_eq(guess.0) & !used;
+        let first_match = simd_word::first(matches);
+        used |= first_match;
+        moved |= first_match;
+    }
+    dbg!(correct);
+    dbg!(moved);
+    let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
+    ResponseInt(cell_values.horizontal_sum())
 }
 
 pub struct VecPool<T> {
@@ -375,42 +436,71 @@ pub fn minimax<'pool>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ResponseCell::*;
+    const TEST_CHECK_GUESS_CASES: [(&str, &str, Response); 8] = [
+        (
+            "opens",
+            "abbey",
+            Response([Wrong, Wrong, Moved, Wrong, Wrong]),
+        ),
+        (
+            "babes",
+            "abbey",
+            Response([Moved, Moved, Correct, Correct, Wrong]),
+        ),
+        (
+            "kebab",
+            "abbey",
+            Response([Wrong, Moved, Correct, Moved, Moved]),
+        ),
+        (
+            "algae",
+            "abbey",
+            Response([Correct, Wrong, Wrong, Wrong, Moved]),
+        ),
+        (
+            "keeps",
+            "abbey",
+            Response([Wrong, Moved, Wrong, Wrong, Wrong]),
+        ),
+        (
+            "orbit",
+            "abbey",
+            Response([Wrong, Wrong, Correct, Wrong, Wrong]),
+        ),
+        (
+            "abate",
+            "abbey",
+            Response([Correct, Correct, Wrong, Wrong, Moved]),
+        ),
+        (
+            "abbey",
+            "abbey",
+            Response([Correct, Correct, Correct, Correct, Correct]),
+        ),
+    ];
     #[test]
     fn test_check_guess() {
-        use ResponseCell::*;
-        assert_eq!(
-            check_guess("opens".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Wrong, Wrong, Moved, Wrong, Wrong])
-        );
-        assert_eq!(
-            check_guess("babes".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Moved, Moved, Correct, Correct, Wrong])
-        );
-        assert_eq!(
-            check_guess("kebab".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Wrong, Moved, Correct, Moved, Moved])
-        );
-
-        assert_eq!(
-            check_guess("algae".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Correct, Wrong, Wrong, Wrong, Moved])
-        );
-        assert_eq!(
-            check_guess("keeps".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Wrong, Moved, Wrong, Wrong, Wrong])
-        );
-        assert_eq!(
-            check_guess("orbit".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Wrong, Wrong, Correct, Wrong, Wrong])
-        );
-        assert_eq!(
-            check_guess("abate".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Correct, Correct, Wrong, Wrong, Moved])
-        );
-        assert_eq!(
-            check_guess("abbey".parse().unwrap(), "abbey".parse().unwrap()),
-            Response([Correct, Correct, Correct, Correct, Correct])
-        );
+        for &(guess, answer, expected) in &TEST_CHECK_GUESS_CASES {
+            assert_eq!(
+                check_guess(guess.parse().unwrap(), answer.parse().unwrap()),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn test_check_guess_simd() {
+        for &(guess, answer, expected) in &TEST_CHECK_GUESS_CASES {
+            let guess_simd = SimdWord::from_word(guess.parse().unwrap());
+            let answer_simd = SimdWord::from_word(answer.parse().unwrap());
+            assert_eq!(
+                Response::from_int(check_guess_simd(guess_simd, answer_simd)),
+                expected,
+                "Guess: {}, Answer: {}",
+                guess,
+                answer
+            );
+        }
     }
 
     #[test]
