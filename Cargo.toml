@@ -17,12 +17,19 @@ path = "src/lib.rs"
 debug = true
 
 [[bench]]
-name = "benchmark"
+name = "iai"
+path = "benches/iai.rs"
+harness = false
+
+[[bench]]
+name = "criterion"
+path = "benches/crtierion.rs"
 harness = false
 
 [dependencies]
 
 [dev-dependencies]
+criterion = "0.3"
 iai = "0.1"
 
 [profile.bench]

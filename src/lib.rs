@@ -79,7 +79,7 @@ impl Debug for ResponseInt {
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ResponseInt(u8);
+pub struct ResponseInt(pub u8);
 
 impl Debug for Response {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -89,7 +89,7 @@ impl Debug for Response {
 }
 
 impl Response {
-    fn as_int(&self) -> ResponseInt {
+    pub fn as_int(&self) -> ResponseInt {
         ResponseInt(self.0.iter().fold(0, |acc, &cell| acc * 3 + cell as u8))
     }
     fn from_int(ResponseInt(mut x): ResponseInt) -> Self {
@@ -122,7 +122,7 @@ fn alist_get_or_else<K: Eq, V, F: FnOnce() -> V>(
     }
 }
 
-fn check_guess(guess: Word, answer: Word) -> Response {
+pub fn check_guess(guess: Word, answer: Word) -> Response {
     let mut used = [false, false, false, false, false];
     let mut out = [
         ResponseCell::Wrong,
@@ -190,19 +190,20 @@ impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
     }
 }
 
-struct SimdWord(u8x8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SimdWord(u8x8);
 impl SimdWord {
-    fn from_word(word: Word) -> Self {
+    pub fn from_word(word: Word) -> Self {
         let Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)]) = word;
         SimdWord(u8x8::from_array([l0, l1, l2, l3, l4, 0, 0, 0]))
     }
-    fn to_word(self) -> Word {
+    pub fn to_word(self) -> Word {
         let &[l0, l1, l2, l3, l4, _, _, _] = self.0.as_array();
         Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)])
     }
 }
 
-fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
+pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
     const POW_3: u8x8 = u8x8::from_array([
         3u8.pow(4),
         3u8.pow(3),
@@ -242,8 +243,6 @@ fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
         used |= first_match;
         moved |= first_match;
     }
-    dbg!(correct);
-    dbg!(moved);
     let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
     ResponseInt(cell_values.horizontal_sum())
 }
