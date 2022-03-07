@@ -229,8 +229,6 @@ pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
 
     // Refers to both guess and answer
     let correct = guess.0.lanes_eq(answer.0);
-    // refers to guess
-    let mut used = correct;
     // Refers to guess
     let mut moved = mask8x8::splat(false);
     // i refers to answer
@@ -238,9 +236,8 @@ pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
         if correct.test(i) {
             continue;
         }
-        let matches = u8x8::splat(answer.0.as_array()[i]).lanes_eq(guess.0) & !used;
+        let matches = u8x8::splat(answer.0.as_array()[i]).lanes_eq(guess.0) & !(correct | moved);
         let first_match = simd_word::first(matches);
-        used |= first_match;
         moved |= first_match;
     }
     let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
