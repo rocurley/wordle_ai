@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut, Index};
 use std::simd::{mask8x8, u8x8};
 use std::str::FromStr;
@@ -178,9 +179,9 @@ impl ResponseLUT {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuessIx(pub usize);
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AnswerIx(pub usize);
 
 impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
@@ -300,7 +301,27 @@ impl<'a, T> IntoIterator for PoolVec<'a, T> {
     }
 }
 
-fn bucket_answers_by_response<'pool>(
+impl<'a, T: Hash> Hash for PoolVec<'a, T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.vec.hash(state);
+    }
+}
+
+impl<'a, T: PartialEq> PartialEq for PoolVec<'a, T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.vec == other.vec
+    }
+}
+
+impl<'a, T: Eq> Eq for PoolVec<'a, T> {}
+
+impl<'a, T> PoolVec<'a, T> {
+    pub fn from_vec(pool: &'a VecPool<T>, vec: Vec<T>) -> Self {
+        PoolVec { pool, vec }
+    }
+}
+
+pub fn bucket_answers_by_response<'pool>(
     pools: &'pool AllPools<'pool>,
     guess: GuessIx,
     possible_answers: &[AnswerIx],
@@ -348,9 +369,9 @@ fn merge_max<'pool>(max: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'po
 }
 
 pub struct AllPools<'pool> {
-    buckets_pool: VecPool<(ResponseInt, PoolVec<'pool, AnswerIx>)>,
-    words_pool: VecPool<AnswerIx>,
-    frames_pool: VecPool<MinimaxFrame<'pool>>,
+    pub buckets_pool: VecPool<(ResponseInt, PoolVec<'pool, AnswerIx>)>,
+    pub words_pool: VecPool<AnswerIx>,
+    pub frames_pool: VecPool<MinimaxFrame<'pool>>,
 }
 
 impl AllPools<'static> {
@@ -363,39 +384,49 @@ impl AllPools<'static> {
     }
 }
 
-pub fn minimax<'pool>(
-    pools: &'pool AllPools<'pool>,
-    lut: &ResponseLUT,
+pub struct MinimaxSharedState {
+    pools: &'static AllPools<'static>,
+    lut: ResponseLUT,
+    possible_guesses: Vec<GuessIx>,
+}
+
+impl MinimaxSharedState {
+    pub fn new(answers: &[Word], guesses: &[Word]) -> Self {
+        let pools = AllPools::new();
+        let lut = ResponseLUT::new(&guesses, &answers);
+        let possible_guesses: Vec<GuessIx> = (0..guesses.len()).map(|i| GuessIx(i)).collect();
+        MinimaxSharedState {
+            pools,
+            lut,
+            possible_guesses,
+        }
+    }
+}
+
+pub fn minimax(
+    shared: &MinimaxSharedState,
     depth: usize,
-    possible_guesses: &[GuessIx],
     possible_answers: &[AnswerIx],
     min_min: Option<usize>,
     verbose: bool,
-) -> Option<MinimaxTrace<'pool>> {
+) -> Option<MinimaxTrace<'static>> {
     if depth == 0 {
         return Some(MinimaxTrace {
-            frames: pools.frames_pool.take_vec(),
+            frames: shared.pools.frames_pool.take_vec(),
             score: possible_answers.len(),
         });
     }
-    let len = possible_guesses.len();
+    let len = shared.possible_guesses.len();
     let mut min_trace: Option<MinimaxTrace> = None;
-    'find_guess: for (i, &guess) in possible_guesses.into_iter().enumerate() {
+    'find_guess: for (i, &guess) in shared.possible_guesses.iter().enumerate() {
         if verbose {
             println!("{}/{}", i, len);
         }
-        let possible_responses = bucket_answers_by_response(pools, guess, possible_answers, lut);
+        let possible_responses =
+            bucket_answers_by_response(shared.pools, guess, possible_answers, &shared.lut);
         let mut max_trace: Option<MinimaxTrace> = None;
         for (response, remaining_answers) in possible_responses {
-            let child_trace_option = minimax(
-                pools,
-                lut,
-                depth - 1,
-                possible_guesses,
-                &remaining_answers,
-                None,
-                false,
-            );
+            let child_trace_option = minimax(shared, depth - 1, &remaining_answers, None, false);
             let mut child_trace = if let Some(tr) = child_trace_option {
                 tr
             } else {
