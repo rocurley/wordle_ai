@@ -5,10 +5,11 @@ use wordle_ai_lib::{Minimaxer, Word};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let guesses = read_words(&args[1]);
-    let answers = read_words(&args[2]);
+    let depth = args[1].parse().unwrap();
+    let guesses = read_words(&args[2]);
+    let answers = read_words(&args[3]);
     let minimaxer = Minimaxer::new(answers, guesses);
-    let out = minimaxer.run(2, true);
+    let out = minimaxer.run(depth, true);
     dbg!(out);
 }
 

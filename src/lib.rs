@@ -401,6 +401,12 @@ struct MinimaxerCacheKey {
     possible_answers: Vec<AnswerIx>,
 }
 
+#[derive(Clone, Debug)]
+pub enum MinimaxResult {
+    Complete { trace: MinimaxTrace<'static> },
+    Pruned { score: usize },
+}
+
 impl Minimaxer {
     pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
         let pools = AllPools::new();
@@ -416,35 +422,47 @@ impl Minimaxer {
             answer_ixs,
         }
     }
-    pub fn run(&self, depth: usize, verbose: bool) -> Option<MinimaxTrace<'static>> {
+    pub fn run(&self, depth: usize, verbose: bool) -> MinimaxResult {
         // TODO: hydrate results
         let mut cache = HashMap::new();
         self.minimax(&mut cache, depth, &self.answer_ixs, None, verbose)
     }
     fn minimax(
         &self,
-        cache: &mut HashMap<MinimaxerCacheKey, MinimaxTrace<'static>>,
+        cache: &mut HashMap<MinimaxerCacheKey, MinimaxResult>,
         depth: usize,
         possible_answers: &[AnswerIx],
         min_min: Option<usize>,
         verbose: bool,
-    ) -> Option<MinimaxTrace<'static>> {
+    ) -> MinimaxResult {
         if depth == 0 {
-            return Some(MinimaxTrace {
-                frames: self.pools.frames_pool.take_vec(),
-                score: possible_answers.len(),
-            });
+            return MinimaxResult::Complete {
+                trace: MinimaxTrace {
+                    frames: self.pools.frames_pool.take_vec(),
+                    score: possible_answers.len(),
+                },
+            };
         }
-        // TODO: try to avoid this copy
         let cache_key = MinimaxerCacheKey {
             depth,
+            // TODO: try to avoid this copy
             possible_answers: possible_answers.to_vec(),
         };
         if let Some(cached) = cache.get(&cache_key) {
-            return Some(cached.clone());
+            match cached {
+                MinimaxResult::Complete { .. } => return cached.clone(),
+                MinimaxResult::Pruned { score } => {
+                    if let Some(min_min) = min_min {
+                        if *score < min_min {
+                            return cached.clone();
+                        }
+                    }
+                }
+            }
         }
         let len = self.guess_ixs.len();
         let mut min_trace: Option<MinimaxTrace> = None;
+        // Find min score over all guesses
         'find_guess: for (i, &guess) in self.guess_ixs.iter().enumerate() {
             if verbose {
                 println!("{}/{}", i, len);
@@ -452,11 +470,11 @@ impl Minimaxer {
             let possible_responses =
                 bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
             let mut max_trace: Option<MinimaxTrace> = None;
+            // Find max score over all responses
             for (response, remaining_answers) in possible_responses {
-                let child_trace_option =
-                    self.minimax(cache, depth - 1, &remaining_answers, None, false);
-                let mut child_trace = if let Some(tr) = child_trace_option {
-                    tr
+                let child_result = self.minimax(cache, depth - 1, &remaining_answers, None, false);
+                let mut child_trace = if let MinimaxResult::Complete { trace } = child_result {
+                    trace
                 } else {
                     continue;
                 };
@@ -471,6 +489,8 @@ impl Minimaxer {
                         if verbose {
                             println!("pruned!");
                         }
+                        // Note that this can only trigger if min_trace is populated, so min_trace
+                        // must be set at least once.
                         continue 'find_guess;
                     }
                 }
@@ -479,16 +499,18 @@ impl Minimaxer {
             if let Some(max_trace) = max_trace {
                 if let Some(min_min) = min_min {
                     if max_trace.score <= min_min {
-                        return None;
+                        return MinimaxResult::Pruned {
+                            score: max_trace.score,
+                        };
                     }
                 }
                 merge_min(&mut min_trace, max_trace);
             }
         }
-        if let Some(tr) = min_trace.as_ref() {
-            cache.insert(cache_key, tr.clone());
-        }
-        min_trace
+        let trace = min_trace.expect("min_trace must get set at least once");
+        let result = MinimaxResult::Complete { trace };
+        cache.insert(cache_key, result.clone());
+        result
     }
 }
 
