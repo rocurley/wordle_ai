@@ -2,6 +2,7 @@
 #![feature(portable_simd)]
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
@@ -261,6 +262,7 @@ impl<'a, T> VecPool<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct PoolVec<'a, T> {
     pool: &'a VecPool<T>,
     vec: Vec<T>,
@@ -335,7 +337,7 @@ pub fn bucket_answers_by_response<'pool>(
     out
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MinimaxTrace<'pool> {
     pub frames: PoolVec<'pool, MinimaxFrame<'pool>>,
     pub score: usize,
@@ -347,7 +349,7 @@ impl<'pool> MinimaxTrace<'pool> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MinimaxFrame<'pool> {
     guess: GuessIx,
     response: ResponseInt,
@@ -393,6 +395,12 @@ pub struct Minimaxer {
     answer_ixs: Vec<AnswerIx>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct MinimaxerCacheKey {
+    depth: usize,
+    possible_answers: Vec<AnswerIx>,
+}
+
 impl Minimaxer {
     pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
         let pools = AllPools::new();
@@ -410,10 +418,12 @@ impl Minimaxer {
     }
     pub fn run(&self, depth: usize, verbose: bool) -> Option<MinimaxTrace<'static>> {
         // TODO: hydrate results
-        self.minimax(depth, &self.answer_ixs, None, verbose)
+        let mut cache = HashMap::new();
+        self.minimax(&mut cache, depth, &self.answer_ixs, None, verbose)
     }
     fn minimax(
         &self,
+        cache: &mut HashMap<MinimaxerCacheKey, MinimaxTrace<'static>>,
         depth: usize,
         possible_answers: &[AnswerIx],
         min_min: Option<usize>,
@@ -425,6 +435,14 @@ impl Minimaxer {
                 score: possible_answers.len(),
             });
         }
+        // TODO: try to avoid this copy
+        let cache_key = MinimaxerCacheKey {
+            depth,
+            possible_answers: possible_answers.to_vec(),
+        };
+        if let Some(cached) = cache.get(&cache_key) {
+            return Some(cached.clone());
+        }
         let len = self.guess_ixs.len();
         let mut min_trace: Option<MinimaxTrace> = None;
         'find_guess: for (i, &guess) in self.guess_ixs.iter().enumerate() {
@@ -435,7 +453,8 @@ impl Minimaxer {
                 bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
             let mut max_trace: Option<MinimaxTrace> = None;
             for (response, remaining_answers) in possible_responses {
-                let child_trace_option = self.minimax(depth - 1, &remaining_answers, None, false);
+                let child_trace_option =
+                    self.minimax(cache, depth - 1, &remaining_answers, None, false);
                 let mut child_trace = if let Some(tr) = child_trace_option {
                     tr
                 } else {
@@ -465,6 +484,9 @@ impl Minimaxer {
                 }
                 merge_min(&mut min_trace, max_trace);
             }
+        }
+        if let Some(tr) = min_trace.as_ref() {
+            cache.insert(cache_key, tr.clone());
         }
         min_trace
     }
