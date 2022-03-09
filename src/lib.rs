@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut, Index};
 use std::simd::{mask8x8, u8x8};
@@ -17,6 +17,9 @@ struct Letter(u8);
 impl Letter {
     fn to_char(self) -> char {
         (b'a' + self.0) as char
+    }
+    fn to_wide_char(self) -> char {
+        char::from_u32(self.0 as u32 + 0xff21).unwrap()
     }
     fn from_char(c: char) -> Option<Self> {
         let ascii: u8 = (c as u32).try_into().ok()?;
@@ -33,6 +36,12 @@ pub struct Word([Letter; 5]);
 impl Debug for Word {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let s: String = self.0.into_iter().map(Letter::to_char).collect();
+        f.write_str(&s)
+    }
+}
+impl Display for Word {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s: String = self.0.into_iter().map(Letter::to_wide_char).collect();
         f.write_str(&s)
     }
 }
@@ -296,7 +305,7 @@ impl<'a, T: Debug> Debug for PoolVec<'a, T> {
 }
 
 impl<'a, T> IntoIterator for PoolVec<'a, T> {
-    type IntoIter = impl Iterator<Item = T>;
+    type IntoIter = std::vec::IntoIter<T>;
     type Item = T;
     fn into_iter(mut self) -> Self::IntoIter {
         std::mem::replace(&mut self.vec, Vec::new()).into_iter()
@@ -349,11 +358,71 @@ impl<'pool> MinimaxTrace<'pool> {
     }
 }
 
+impl<'pool> MinimaxTrace<'pool> {
+    fn hydrate(self, guesses: &[Word], answers: &[Word]) -> HydratedMinimaxTrace {
+        let MinimaxTrace { frames, score } = self;
+        let frames = frames
+            .into_iter()
+            .rev()
+            .map(|frame| frame.hydrate(guesses, answers))
+            .collect();
+        HydratedMinimaxTrace { score, frames }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MinimaxFrame<'pool> {
     guess: GuessIx,
     response: ResponseInt,
     remaining_answers: PoolVec<'pool, AnswerIx>,
+}
+
+impl<'pool> MinimaxFrame<'pool> {
+    fn hydrate(self, guesses: &[Word], answers: &[Word]) -> HydratedMinimaxFrame {
+        let MinimaxFrame {
+            guess,
+            response,
+            remaining_answers,
+        } = self;
+        let guess = guesses[guess.0];
+        let remaining_answers = remaining_answers
+            .into_iter()
+            .map(|answer| answers[answer.0])
+            .collect();
+        HydratedMinimaxFrame {
+            guess,
+            response,
+            remaining_answers,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HydratedMinimaxTrace {
+    pub frames: Vec<HydratedMinimaxFrame>,
+    pub score: usize,
+}
+
+impl Display for HydratedMinimaxTrace {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for frame in &self.frames {
+            write!(
+                f,
+                "Guess:     {}\nResponse:  {:?}\nRemaining: {}\n",
+                frame.guess,
+                frame.response,
+                frame.remaining_answers.len()
+            )?
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HydratedMinimaxFrame {
+    guess: Word,
+    response: ResponseInt,
+    remaining_answers: Vec<Word>,
 }
 
 fn merge_min<'pool>(min: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'pool>) {
@@ -422,10 +491,15 @@ impl Minimaxer {
             answer_ixs,
         }
     }
-    pub fn run(&self, depth: usize, verbose: bool) -> MinimaxResult {
-        // TODO: hydrate results
+    pub fn run(&self, depth: usize, verbose: bool) -> HydratedMinimaxTrace {
         let mut cache = HashMap::new();
-        self.minimax(&mut cache, depth, &self.answer_ixs, None, verbose)
+        let raw = self.minimax(&mut cache, depth, &self.answer_ixs, None, verbose);
+        let trace = if let MinimaxResult::Complete { trace } = raw {
+            trace
+        } else {
+            unreachable!();
+        };
+        trace.hydrate(&self.guesses, &self.answers)
     }
     fn minimax(
         &self,
