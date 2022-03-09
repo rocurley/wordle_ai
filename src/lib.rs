@@ -384,80 +384,90 @@ impl AllPools<'static> {
     }
 }
 
-pub struct MinimaxSharedState {
+pub struct Minimaxer {
     pools: &'static AllPools<'static>,
     lut: ResponseLUT,
-    possible_guesses: Vec<GuessIx>,
+    guesses: Vec<Word>,
+    answers: Vec<Word>,
+    guess_ixs: Vec<GuessIx>,
+    answer_ixs: Vec<AnswerIx>,
 }
 
-impl MinimaxSharedState {
-    pub fn new(answers: &[Word], guesses: &[Word]) -> Self {
+impl Minimaxer {
+    pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
         let pools = AllPools::new();
         let lut = ResponseLUT::new(&guesses, &answers);
-        let possible_guesses: Vec<GuessIx> = (0..guesses.len()).map(|i| GuessIx(i)).collect();
-        MinimaxSharedState {
+        let guess_ixs: Vec<GuessIx> = (0..guesses.len()).map(|i| GuessIx(i)).collect();
+        let answer_ixs: Vec<AnswerIx> = (0..answers.len()).map(|i| AnswerIx(i)).collect();
+        Minimaxer {
             pools,
             lut,
-            possible_guesses,
+            guesses,
+            answers,
+            guess_ixs,
+            answer_ixs,
         }
     }
-}
-
-pub fn minimax(
-    shared: &MinimaxSharedState,
-    depth: usize,
-    possible_answers: &[AnswerIx],
-    min_min: Option<usize>,
-    verbose: bool,
-) -> Option<MinimaxTrace<'static>> {
-    if depth == 0 {
-        return Some(MinimaxTrace {
-            frames: shared.pools.frames_pool.take_vec(),
-            score: possible_answers.len(),
-        });
+    pub fn run(&self, depth: usize, verbose: bool) -> Option<MinimaxTrace<'static>> {
+        // TODO: hydrate results
+        self.minimax(depth, &self.answer_ixs, None, verbose)
     }
-    let len = shared.possible_guesses.len();
-    let mut min_trace: Option<MinimaxTrace> = None;
-    'find_guess: for (i, &guess) in shared.possible_guesses.iter().enumerate() {
-        if verbose {
-            println!("{}/{}", i, len);
+    fn minimax(
+        &self,
+        depth: usize,
+        possible_answers: &[AnswerIx],
+        min_min: Option<usize>,
+        verbose: bool,
+    ) -> Option<MinimaxTrace<'static>> {
+        if depth == 0 {
+            return Some(MinimaxTrace {
+                frames: self.pools.frames_pool.take_vec(),
+                score: possible_answers.len(),
+            });
         }
-        let possible_responses =
-            bucket_answers_by_response(shared.pools, guess, possible_answers, &shared.lut);
-        let mut max_trace: Option<MinimaxTrace> = None;
-        for (response, remaining_answers) in possible_responses {
-            let child_trace_option = minimax(shared, depth - 1, &remaining_answers, None, false);
-            let mut child_trace = if let Some(tr) = child_trace_option {
-                tr
-            } else {
-                continue;
-            };
-            let new_frame = MinimaxFrame {
-                guess,
-                response,
-                remaining_answers,
-            };
-            child_trace.push(new_frame);
-            if let Some(min_trace) = min_trace.as_ref() {
-                if child_trace.score > min_trace.score {
-                    if verbose {
-                        println!("pruned!");
+        let len = self.guess_ixs.len();
+        let mut min_trace: Option<MinimaxTrace> = None;
+        'find_guess: for (i, &guess) in self.guess_ixs.iter().enumerate() {
+            if verbose {
+                println!("{}/{}", i, len);
+            }
+            let possible_responses =
+                bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
+            let mut max_trace: Option<MinimaxTrace> = None;
+            for (response, remaining_answers) in possible_responses {
+                let child_trace_option = self.minimax(depth - 1, &remaining_answers, None, false);
+                let mut child_trace = if let Some(tr) = child_trace_option {
+                    tr
+                } else {
+                    continue;
+                };
+                let new_frame = MinimaxFrame {
+                    guess,
+                    response,
+                    remaining_answers,
+                };
+                child_trace.push(new_frame);
+                if let Some(min_trace) = min_trace.as_ref() {
+                    if child_trace.score > min_trace.score {
+                        if verbose {
+                            println!("pruned!");
+                        }
+                        continue 'find_guess;
                     }
-                    continue 'find_guess;
                 }
+                merge_max(&mut max_trace, child_trace);
             }
-            merge_max(&mut max_trace, child_trace);
-        }
-        if let Some(max_trace) = max_trace {
-            if let Some(min_min) = min_min {
-                if max_trace.score <= min_min {
-                    return None;
+            if let Some(max_trace) = max_trace {
+                if let Some(min_min) = min_min {
+                    if max_trace.score <= min_min {
+                        return None;
+                    }
                 }
+                merge_min(&mut min_trace, max_trace);
             }
-            merge_min(&mut min_trace, max_trace);
         }
+        min_trace
     }
-    min_trace
 }
 
 #[cfg(test)]

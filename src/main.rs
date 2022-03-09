@@ -1,18 +1,15 @@
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use wordle_ai_lib::{minimax, AllPools, AnswerIx, GuessIx, MinimaxSharedState, ResponseLUT, Word};
+use wordle_ai_lib::{Minimaxer, Word};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let guesses = read_words(&args[1]);
     let answers = read_words(&args[2]);
-    let answer_ixs: Vec<AnswerIx> = (0..answers.len()).map(|i| AnswerIx(i)).collect();
-    let minimaxer = MinimaxSharedState::new(&answers, &guesses);
-    {
-        let out = minimax(&minimaxer, 2, &answer_ixs, None, true);
-        dbg!(out);
-    }
+    let minimaxer = Minimaxer::new(answers, guesses);
+    let out = minimaxer.run(2, true);
+    dbg!(out);
 }
 
 fn read_words(path: &str) -> Vec<Word> {

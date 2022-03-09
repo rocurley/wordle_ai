@@ -3,7 +3,7 @@ use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use wordle_ai_lib::{
-    bucket_answers_by_response, minimax, AllPools, AnswerIx, GuessIx, PoolVec, ResponseLUT, Word,
+    bucket_answers_by_response, AllPools, AnswerIx, GuessIx, PoolVec, ResponseLUT, Word,
 };
 
 fn main() {
