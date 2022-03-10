@@ -465,7 +465,7 @@ pub struct Minimaxer {
 }
 
 #[derive(PartialEq, Eq, Hash)]
-struct MinimaxerCacheKey {
+struct MinCacheKey {
     depth: usize,
     possible_answers: Vec<AnswerIx>,
 }
@@ -474,6 +474,37 @@ struct MinimaxerCacheKey {
 pub enum MinimaxResult {
     Complete { trace: MinimaxTrace<'static> },
     Pruned { score: usize },
+}
+
+struct Cache {
+    map: HashMap<MinCacheKey, MinimaxResult>,
+    hits: [usize; 6],
+    misses: [usize; 6],
+}
+
+impl Cache {
+    fn new() -> Self {
+        Cache {
+            map: HashMap::new(),
+            hits: [0; 6],
+            misses: [0; 6],
+        }
+    }
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+    fn get(&mut self, k: &MinCacheKey) -> Option<&MinimaxResult> {
+        let res = self.map.get(k);
+        if res.is_some() {
+            self.hits[k.depth] += 1;
+        } else {
+            self.misses[k.depth] += 1;
+        }
+        res
+    }
+    fn insert(&mut self, k: MinCacheKey, v: MinimaxResult) {
+        self.map.insert(k, v);
+    }
 }
 
 impl Minimaxer {
@@ -492,18 +523,19 @@ impl Minimaxer {
         }
     }
     pub fn run(&self, depth: usize, verbose: bool) -> HydratedMinimaxTrace {
-        let mut cache = HashMap::new();
+        let mut cache = Cache::new();
         let raw = self.minimax(&mut cache, depth, &self.answer_ixs, None, verbose);
         let trace = if let MinimaxResult::Complete { trace } = raw {
             trace
         } else {
             unreachable!();
         };
+        dbg!(cache.len(), cache.hits, cache.misses);
         trace.hydrate(&self.guesses, &self.answers)
     }
     fn minimax(
         &self,
-        cache: &mut HashMap<MinimaxerCacheKey, MinimaxResult>,
+        minimize_cache: &mut Cache,
         depth: usize,
         possible_answers: &[AnswerIx],
         min_min: Option<usize>,
@@ -517,18 +549,20 @@ impl Minimaxer {
                 },
             };
         }
-        let cache_key = MinimaxerCacheKey {
+        let cache_key = MinCacheKey {
             depth,
             // TODO: try to avoid this copy
             possible_answers: possible_answers.to_vec(),
         };
-        if let Some(cached) = cache.get(&cache_key) {
+        if let Some(cached) = minimize_cache.get(&cache_key) {
             match cached {
                 MinimaxResult::Complete { .. } => return cached.clone(),
                 MinimaxResult::Pruned { score } => {
                     if let Some(min_min) = min_min {
                         if *score < min_min {
                             return cached.clone();
+                        } else {
+                            println!("Found cache entry, but it was insufficient");
                         }
                     }
                 }
@@ -546,7 +580,8 @@ impl Minimaxer {
             let mut max_trace: Option<MinimaxTrace> = None;
             // Find max score over all responses
             for (response, remaining_answers) in possible_responses {
-                let child_result = self.minimax(cache, depth - 1, &remaining_answers, None, false);
+                let child_result =
+                    self.minimax(minimize_cache, depth - 1, &remaining_answers, None, false);
                 let mut child_trace = if let MinimaxResult::Complete { trace } = child_result {
                     trace
                 } else {
@@ -573,17 +608,23 @@ impl Minimaxer {
             if let Some(max_trace) = max_trace {
                 if let Some(min_min) = min_min {
                     if max_trace.score <= min_min {
-                        return MinimaxResult::Pruned {
+                        let result = MinimaxResult::Pruned {
                             score: max_trace.score,
                         };
+                        minimize_cache.insert(cache_key, result.clone());
+                        return result;
                     }
                 }
+                let short_circuit = max_trace.score == 1;
                 merge_min(&mut min_trace, max_trace);
+                if short_circuit {
+                    break;
+                }
             }
         }
         let trace = min_trace.expect("min_trace must get set at least once");
         let result = MinimaxResult::Complete { trace };
-        cache.insert(cache_key, result.clone());
+        minimize_cache.insert(cache_key, result.clone());
         result
     }
 }
