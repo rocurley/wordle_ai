@@ -524,7 +524,7 @@ impl Minimaxer {
     }
     pub fn run(&self, depth: usize, verbose: bool) -> HydratedMinimaxTrace {
         let mut cache = Cache::new();
-        let raw = self.minimax(&mut cache, depth, &self.answer_ixs, None, verbose);
+        let raw = self.minimize(&mut cache, depth, &self.answer_ixs, None, verbose);
         let trace = if let MinimaxResult::Complete { trace } = raw {
             trace
         } else {
@@ -533,7 +533,7 @@ impl Minimaxer {
         dbg!(cache.len(), cache.hits, cache.misses);
         trace.hydrate(&self.guesses, &self.answers)
     }
-    fn minimax(
+    fn minimize(
         &self,
         minimize_cache: &mut Cache,
         depth: usize,
@@ -571,40 +571,19 @@ impl Minimaxer {
         let len = self.guess_ixs.len();
         let mut min_trace: Option<MinimaxTrace> = None;
         // Find min score over all guesses
-        'find_guess: for (i, &guess) in self.guess_ixs.iter().enumerate() {
+        for (i, &guess) in self.guess_ixs.iter().enumerate() {
             if verbose {
                 println!("{}/{}", i, len);
             }
-            let possible_responses =
-                bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
-            let mut max_trace: Option<MinimaxTrace> = None;
-            // Find max score over all responses
-            for (response, remaining_answers) in possible_responses {
-                let child_result =
-                    self.minimax(minimize_cache, depth - 1, &remaining_answers, None, false);
-                let mut child_trace = if let MinimaxResult::Complete { trace } = child_result {
-                    trace
-                } else {
-                    continue;
-                };
-                let new_frame = MinimaxFrame {
-                    guess,
-                    response,
-                    remaining_answers,
-                };
-                child_trace.push(new_frame);
-                if let Some(min_trace) = min_trace.as_ref() {
-                    if child_trace.score > min_trace.score {
-                        if verbose {
-                            println!("pruned!");
-                        }
-                        // Note that this can only trigger if min_trace is populated, so min_trace
-                        // must be set at least once.
-                        continue 'find_guess;
-                    }
-                }
-                merge_max(&mut max_trace, child_trace);
-            }
+            let max_max = min_trace.as_ref().map(|tr| tr.score);
+            let max_trace = self.maximize(
+                minimize_cache,
+                guess,
+                depth,
+                possible_answers,
+                max_max,
+                verbose,
+            );
             if let Some(max_trace) = max_trace {
                 if let Some(min_min) = min_min {
                     if max_trace.score <= min_min {
@@ -626,6 +605,48 @@ impl Minimaxer {
         let result = MinimaxResult::Complete { trace };
         minimize_cache.insert(cache_key, result.clone());
         result
+    }
+
+    fn maximize(
+        &self,
+        minimize_cache: &mut Cache,
+        guess: GuessIx,
+        depth: usize,
+        possible_answers: &[AnswerIx],
+        max_max: Option<usize>,
+        verbose: bool,
+    ) -> Option<MinimaxTrace<'static>> {
+        let possible_responses =
+            bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
+        let mut max_trace: Option<MinimaxTrace> = None;
+        // Find max score over all responses
+        for (response, remaining_answers) in possible_responses {
+            let child_result =
+                self.minimize(minimize_cache, depth - 1, &remaining_answers, None, false);
+            let mut child_trace = if let MinimaxResult::Complete { trace } = child_result {
+                trace
+            } else {
+                continue;
+            };
+            if let Some(max_max) = max_max {
+                if child_trace.score > max_max {
+                    if verbose {
+                        println!("pruned!");
+                    }
+                    // Note that this can only trigger if min_trace is populated, so min_trace
+                    // must be set at least once.
+                    return None;
+                }
+            }
+            let new_frame = MinimaxFrame {
+                guess,
+                response,
+                remaining_answers,
+            };
+            child_trace.push(new_frame);
+            merge_max(&mut max_trace, child_trace);
+        }
+        max_trace
     }
 }
 
