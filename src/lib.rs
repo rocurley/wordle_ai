@@ -346,10 +346,16 @@ pub fn bucket_answers_by_response<'pool>(
     out
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Score {
+    Complete { depth: usize },
+    Incomplete { words: usize },
+}
+
 #[derive(Debug, Clone)]
 pub struct MinimaxTrace<'pool> {
     pub frames: PoolVec<'pool, MinimaxFrame<'pool>>,
-    pub score: usize,
+    pub score: Score,
 }
 
 impl<'pool> MinimaxTrace<'pool> {
@@ -400,7 +406,7 @@ impl<'pool> MinimaxFrame<'pool> {
 #[derive(Debug, Clone)]
 pub struct HydratedMinimaxTrace {
     pub frames: Vec<HydratedMinimaxFrame>,
-    pub score: usize,
+    pub score: Score,
 }
 
 impl Display for HydratedMinimaxTrace {
@@ -466,7 +472,7 @@ struct MinCacheKey {
 #[derive(Clone, Debug)]
 pub enum MinimaxResult {
     Complete { trace: MinimaxTrace<'static> },
-    Pruned { score: usize },
+    Pruned { score: Score },
 }
 
 struct Cache {
@@ -515,9 +521,9 @@ impl Minimaxer {
             answer_ixs,
         }
     }
-    pub fn run(&self, depth: usize, verbose: bool) -> HydratedMinimaxTrace {
+    pub fn run(&self, search_depth: usize, verbose: bool) -> HydratedMinimaxTrace {
         let mut cache = Cache::new();
-        let raw = self.minimize(&mut cache, depth, &self.answer_ixs, None, verbose);
+        let raw = self.minimize(&mut cache, 0, search_depth, &self.answer_ixs, None, verbose);
         let trace = if let MinimaxResult::Complete { trace } = raw {
             trace
         } else {
@@ -527,13 +533,21 @@ impl Minimaxer {
         //dbg!(cache.map);
         trace.hydrate(&self.guesses, &self.answers)
     }
-    pub fn book(&self, depth: usize, verbose: bool) -> Vec<(Word, HydratedMinimaxTrace)> {
+    pub fn book(&self, search_depth: usize, verbose: bool) -> Vec<(Word, HydratedMinimaxTrace)> {
         let len = self.guess_ixs.len();
         let mut cache = Cache::new();
         let mut out = Vec::new();
         for (i, &guess) in self.guess_ixs.iter().enumerate() {
             let max_trace = self
-                .maximize(&mut cache, guess, depth, &self.answer_ixs, None, verbose)
+                .maximize(
+                    &mut cache,
+                    guess,
+                    0,
+                    search_depth,
+                    &self.answer_ixs,
+                    None,
+                    verbose,
+                )
                 .unwrap()
                 .hydrate(&self.guesses, &self.answers);
             let guess = self.guesses[guess.0];
@@ -550,15 +564,26 @@ impl Minimaxer {
         &self,
         minimize_cache: &mut Cache,
         depth: usize,
+        mut remaining_depth: usize,
         possible_answers: &[AnswerIx],
-        min_min: Option<usize>,
+        min_min: Option<Score>,
         verbose: bool,
     ) -> MinimaxResult {
-        if depth == 0 || possible_answers.len() == 1 {
+        if possible_answers.len() == 1 {
             return MinimaxResult::Complete {
                 trace: MinimaxTrace {
                     frames: self.pools.frames_pool.take_vec(),
-                    score: possible_answers.len(),
+                    score: Score::Complete { depth },
+                },
+            };
+        }
+        if remaining_depth == 0 || possible_answers.len() == 1 {
+            return MinimaxResult::Complete {
+                trace: MinimaxTrace {
+                    frames: self.pools.frames_pool.take_vec(),
+                    score: Score::Incomplete {
+                        words: possible_answers.len(),
+                    },
                 },
             };
         }
@@ -591,6 +616,7 @@ impl Minimaxer {
                 minimize_cache,
                 guess,
                 depth,
+                remaining_depth,
                 possible_answers,
                 max_max,
                 verbose,
@@ -605,9 +631,15 @@ impl Minimaxer {
                         return result;
                     }
                 }
-                let short_circuit = max_trace.score == 1;
+                if let Score::Complete {
+                    depth: completion_depth,
+                } = max_trace.score
+                {
+                    // No point in going as deep as the already-found victory
+                    remaining_depth = completion_depth - depth - 1;
+                }
                 merge_min(&mut min_trace, max_trace);
-                if short_circuit {
+                if remaining_depth == 0 {
                     break;
                 }
             }
@@ -623,8 +655,9 @@ impl Minimaxer {
         minimize_cache: &mut Cache,
         guess: GuessIx,
         depth: usize,
+        remaining_depth: usize,
         possible_answers: &[AnswerIx],
-        max_max: Option<usize>,
+        max_max: Option<Score>,
         verbose: bool,
     ) -> Option<MinimaxTrace<'static>> {
         let possible_responses =
@@ -639,7 +672,8 @@ impl Minimaxer {
             let min_min = max_trace.as_ref().map(|tr| tr.score);
             let child_result = self.minimize(
                 minimize_cache,
-                depth - 1,
+                depth + 1,
+                remaining_depth - 1,
                 &remaining_answers,
                 min_min,
                 false,
