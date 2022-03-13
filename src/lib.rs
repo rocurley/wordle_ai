@@ -432,13 +432,6 @@ fn merge_min<'pool>(min: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'po
     }
 }
 
-fn merge_max<'pool>(max: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'pool>) {
-    let swap = max.as_ref().map_or(true, |max| max.score < new.score);
-    if swap {
-        max.replace(new);
-    }
-}
-
 pub struct AllPools<'pool> {
     pub buckets_pool: VecPool<(ResponseInt, PoolVec<'pool, AnswerIx>)>,
     pub words_pool: VecPool<AnswerIx>,
@@ -638,13 +631,18 @@ impl Minimaxer {
                     return None;
                 }
             }
-            let new_frame = MinimaxFrame {
-                guess,
-                response,
-                remaining_answers,
-            };
-            child_trace.push(new_frame);
-            merge_max(&mut max_trace, child_trace);
+            let swap = max_trace
+                .as_ref()
+                .map_or(true, |max| max.score < child_trace.score);
+            if swap {
+                let new_frame = MinimaxFrame {
+                    guess,
+                    response,
+                    remaining_answers,
+                };
+                child_trace.push(new_frame);
+                max_trace.replace(child_trace);
+            }
         }
         max_trace
     }
