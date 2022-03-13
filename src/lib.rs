@@ -457,7 +457,7 @@ pub struct Minimaxer {
     answer_ixs: Vec<AnswerIx>,
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 struct MinCacheKey {
     depth: usize,
     possible_answers: Vec<AnswerIx>,
@@ -524,6 +524,7 @@ impl Minimaxer {
             unreachable!();
         };
         dbg!(cache.len(), cache.hits, cache.misses);
+        //dbg!(cache.map);
         trace.hydrate(&self.guesses, &self.answers)
     }
     fn minimize(
@@ -555,7 +556,7 @@ impl Minimaxer {
                         if *score < min_min {
                             return cached.clone();
                         } else {
-                            println!("Found cache entry, but it was insufficient");
+                            //println!("Found cache entry, but it was insufficient");
                         }
                     }
                 }
@@ -614,8 +615,14 @@ impl Minimaxer {
         let mut max_trace: Option<MinimaxTrace> = None;
         // Find max score over all responses
         for (response, remaining_answers) in possible_responses {
-            let child_result =
-                self.minimize(minimize_cache, depth - 1, &remaining_answers, None, false);
+            let min_min = max_trace.as_ref().map(|tr| tr.score);
+            let child_result = self.minimize(
+                minimize_cache,
+                depth - 1,
+                &remaining_answers,
+                min_min,
+                false,
+            );
             let mut child_trace = if let MinimaxResult::Complete { trace } = child_result {
                 trace
             } else {
