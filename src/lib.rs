@@ -527,6 +527,25 @@ impl Minimaxer {
         //dbg!(cache.map);
         trace.hydrate(&self.guesses, &self.answers)
     }
+    pub fn book(&self, depth: usize, verbose: bool) -> Vec<(Word, HydratedMinimaxTrace)> {
+        let len = self.guess_ixs.len();
+        let mut cache = Cache::new();
+        let mut out = Vec::new();
+        for (i, &guess) in self.guess_ixs.iter().enumerate() {
+            let max_trace = self
+                .maximize(&mut cache, guess, depth, &self.answer_ixs, None, verbose)
+                .unwrap()
+                .hydrate(&self.guesses, &self.answers);
+            let guess = self.guesses[guess.0];
+            if verbose {
+                println!("################");
+                println!("{}/{}", i + 1, len);
+                print!("{}", max_trace);
+            }
+            out.push((guess, max_trace));
+        }
+        out
+    }
     fn minimize(
         &self,
         minimize_cache: &mut Cache,
@@ -535,7 +554,7 @@ impl Minimaxer {
         min_min: Option<usize>,
         verbose: bool,
     ) -> MinimaxResult {
-        if depth == 0 {
+        if depth == 0 || possible_answers.len() == 1 {
             return MinimaxResult::Complete {
                 trace: MinimaxTrace {
                     frames: self.pools.frames_pool.take_vec(),
@@ -555,8 +574,6 @@ impl Minimaxer {
                     if let Some(min_min) = min_min {
                         if *score < min_min {
                             return cached.clone();
-                        } else {
-                            //println!("Found cache entry, but it was insufficient");
                         }
                     }
                 }
@@ -612,6 +629,10 @@ impl Minimaxer {
     ) -> Option<MinimaxTrace<'static>> {
         let possible_responses =
             bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
+        if possible_responses.len() == 1 {
+            // Useless guess
+            return None;
+        }
         let mut max_trace: Option<MinimaxTrace> = None;
         // Find max score over all responses
         for (response, remaining_answers) in possible_responses {
