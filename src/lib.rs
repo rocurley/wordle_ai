@@ -119,7 +119,7 @@ impl Response {
     }
 }
 
-fn alist_get_or_else<K: Eq, V, F: FnOnce() -> V>(
+pub fn alist_get_or_else<K: Eq, V, F: FnOnce() -> V>(
     alist: &mut Vec<(K, V)>,
     target: K,
     default: F,

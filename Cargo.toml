@@ -34,6 +34,7 @@ harness = false
 [dependencies]
 
 [dev-dependencies]
+bit-set = "0.5.2"
 criterion = "0.3"
 iai = "0.1"
 
