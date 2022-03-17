@@ -4,7 +4,9 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use wordle_ai_lib::{alist_get_or_else, check_guess, check_guess_simd, SimdWord, Word};
+use wordle_ai_lib::{
+    alist_get_or_else, check_guess, check_guess_simd, check_guess_simd_simple_guess, SimdWord, Word,
+};
 
 fn consume_buckets<'a, I: Iterator<Item = (usize, &'a [usize])>>(iter: I) -> usize {
     iter.into_iter()
@@ -50,6 +52,20 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             for &guess in &simd_words {
                 for &answer in &simd_words {
                     let response = check_guess_simd(guess, answer);
+                    prevent_noop += response.0 as i32;
+                }
+            }
+            prevent_noop
+        })
+    });
+    c.bench_function("check_guess_simd_simple_guess", |b| {
+        b.iter(|| {
+            let mut prevent_noop = 0;
+            for &guess in &simd_words {
+                for &answer in &simd_words {
+                    // Note that this won't actually be right, since we don't check the
+                    // precondition. But that's okay, we just care about speed.
+                    let response = check_guess_simd_simple_guess(guess, answer);
                     prevent_noop += response.0 as i32;
                 }
             }

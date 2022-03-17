@@ -7,7 +7,7 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut, Index};
-use std::simd::{mask8x8, u8x8};
+use std::simd::{mask8x8, simd_swizzle, u8x8};
 use std::str::FromStr;
 mod simd_word;
 
@@ -253,6 +253,51 @@ pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
     }
     let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
     ResponseInt(cell_values.horizontal_sum())
+}
+
+pub fn check_guess_simd_simple_guess(guess: SimdWord, answer: SimdWord) -> ResponseInt {
+    const POW_3: u8x8 = u8x8::from_array([
+        3u8.pow(4),
+        3u8.pow(3),
+        3u8.pow(2),
+        3u8.pow(1),
+        3u8.pow(0),
+        0,
+        0,
+        0,
+    ]);
+    const POW_3X2: u8x8 = u8x8::from_array([
+        2 * 3u8.pow(4),
+        2 * 3u8.pow(3),
+        2 * 3u8.pow(2),
+        2 * 3u8.pow(1),
+        2 * 3u8.pow(0),
+        2 * 0,
+        0,
+        0,
+    ]);
+
+    const ZERO: u8x8 = u8x8::splat(0);
+
+    // Refers to both guess and answer
+    let correct = guess.0.lanes_eq(answer.0);
+    // Refers to guess
+    let moved = moved(guess, answer);
+    let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
+    ResponseInt(cell_values.horizontal_sum())
+}
+
+pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
+    let rot1 = simd_swizzle!(answer.0, [4, 0, 1, 2, 3, 5, 6, 7]);
+    // Refers to guess
+    let mut moved = guess.0.lanes_eq(rot1);
+    let rot2 = simd_swizzle!(answer.0, [3, 4, 0, 1, 2, 5, 6, 7]);
+    moved |= guess.0.lanes_eq(rot2);
+    let rot3 = simd_swizzle!(answer.0, [2, 3, 4, 0, 1, 5, 6, 7]);
+    moved |= guess.0.lanes_eq(rot3);
+    let rot4 = simd_swizzle!(answer.0, [1, 2, 3, 4, 0, 5, 6, 7]);
+    moved |= guess.0.lanes_eq(rot4);
+    moved
 }
 
 pub struct VecPool<T> {
@@ -713,6 +758,8 @@ impl Minimaxer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
     use ResponseCell::*;
     const TEST_CHECK_GUESS_CASES: [(&str, &str, Response); 8] = [
         (
@@ -767,16 +814,45 @@ mod tests {
     }
     #[test]
     fn test_check_guess_simd() {
-        for &(guess, answer, expected) in &TEST_CHECK_GUESS_CASES {
-            let guess_simd = SimdWord::from_word(guess.parse().unwrap());
-            let answer_simd = SimdWord::from_word(answer.parse().unwrap());
-            assert_eq!(
-                Response::from_int(check_guess_simd(guess_simd, answer_simd)),
-                expected,
-                "Guess: {}, Answer: {}",
-                guess,
-                answer
-            );
+        let file = File::open("short.txt").unwrap();
+        let words: Vec<Word> = BufReader::new(file)
+            .lines()
+            .map(|line| line.unwrap().parse().unwrap())
+            .collect();
+        let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
+        for (&guess, &simd_guess) in words.iter().zip(&simd_words) {
+            for (&answer, &simd_answer) in words.iter().zip(&simd_words) {
+                assert_eq!(
+                    Response::from_int(check_guess_simd(simd_guess, simd_answer)),
+                    check_guess(guess, answer),
+                    "Guess: {}, Answer: {}",
+                    guess,
+                    answer
+                );
+            }
+        }
+    }
+    #[test]
+    fn test_check_guess_simd_simple_guess() {
+        let file = File::open("short.txt").unwrap();
+        let words: Vec<Word> = BufReader::new(file)
+            .lines()
+            .map(|line| line.unwrap().parse().unwrap())
+            .collect();
+        let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
+        for (&guess, &simd_guess) in words.iter().zip(&simd_words) {
+            for (&answer, &simd_answer) in words.iter().zip(&simd_words) {
+                if moved(simd_guess, simd_answer).any() {
+                    continue;
+                }
+                assert_eq!(
+                    Response::from_int(check_guess_simd_simple_guess(simd_guess, simd_answer)),
+                    check_guess(guess, answer),
+                    "Guess: {}, Answer: {}",
+                    guess,
+                    answer
+                );
+            }
         }
     }
 
