@@ -4,10 +4,11 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use wordle_ai_lib::{
-    alist_get_or_else, check_guess, check_guess_simd, check_guess_simd_simple_answer,
-    check_guess_simd_simple_guess, check_guess_simd_slow, SimdWord, Word,
+use wordle_ai_lib::simd_word::{
+    check_guess_simd, check_guess_simd_simple_answer, check_guess_simd_simple_guess,
+    check_guess_simd_slow, SimdWord,
 };
+use wordle_ai_lib::{alist_get_or_else, check_guess, Word};
 
 fn consume_buckets<'a, I: Iterator<Item = (usize, &'a [usize])>>(iter: I) -> usize {
     iter.into_iter()
