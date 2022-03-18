@@ -1,6 +1,6 @@
 #![feature(slice_group_by)]
 use bit_set::BitSet;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -33,6 +33,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         .collect();
     let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
     let mut check_guess_group = c.benchmark_group("check_guess");
+    check_guess_group.throughput(Throughput::Elements(words.len().pow(2) as u64));
     check_guess_group.bench_function("non-simd", |b| {
         b.iter(|| {
             let mut prevent_noop = 0;
