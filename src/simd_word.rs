@@ -1,5 +1,30 @@
 use super::{Letter, ResponseInt, Word};
-use std::simd::{mask8x8, simd_swizzle, u8x8, LaneCount, Mask, MaskElement, SupportedLaneCount};
+use std::simd::{
+    i8x8, mask8x8, simd_swizzle, u8x8, LaneCount, Mask, MaskElement, SupportedLaneCount,
+};
+
+const POW_3: u8x8 = u8x8::from_array([
+    3u8.pow(4),
+    3u8.pow(3),
+    3u8.pow(2),
+    3u8.pow(1),
+    3u8.pow(0),
+    0,
+    0,
+    0,
+]);
+const POW_3X2: u8x8 = u8x8::from_array([
+    2 * 3u8.pow(4),
+    2 * 3u8.pow(3),
+    2 * 3u8.pow(2),
+    2 * 3u8.pow(1),
+    2 * 3u8.pow(0),
+    2 * 0,
+    0,
+    0,
+]);
+
+const ZERO: u8x8 = u8x8::splat(0);
 
 pub fn rotate_mask<T: MaskElement, const LANES: usize, const N: usize>(
     m: Mask<T, LANES>,
@@ -11,18 +36,6 @@ where
     let v = m.to_int();
     let vr = v.rotate_lanes_right::<N>();
     unsafe { Mask::<T, LANES>::from_int_unchecked(vr) }
-}
-
-fn safe_rotate_mask<T: MaskElement, const LANES: usize, const N: usize>(
-    m: Mask<T, LANES>,
-) -> Mask<T, LANES>
-where
-    T: MaskElement,
-    LaneCount<LANES>: SupportedLaneCount,
-{
-    let v = m.to_int();
-    let vr = v.rotate_lanes_right::<N>();
-    Mask::<T, LANES>::from_int(vr)
 }
 
 pub fn first<T: MaskElement, const LANES: usize>(m: Mask<T, LANES>) -> Mask<T, LANES>
@@ -77,29 +90,6 @@ pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
 }
 
 pub fn check_guess_simd_slow(guess: SimdWord, answer: SimdWord) -> ResponseInt {
-    const POW_3: u8x8 = u8x8::from_array([
-        3u8.pow(4),
-        3u8.pow(3),
-        3u8.pow(2),
-        3u8.pow(1),
-        3u8.pow(0),
-        0,
-        0,
-        0,
-    ]);
-    const POW_3X2: u8x8 = u8x8::from_array([
-        2 * 3u8.pow(4),
-        2 * 3u8.pow(3),
-        2 * 3u8.pow(2),
-        2 * 3u8.pow(1),
-        2 * 3u8.pow(0),
-        2 * 0,
-        0,
-        0,
-    ]);
-
-    const ZERO: u8x8 = u8x8::splat(0);
-
     // Refers to both guess and answer
     let correct = guess.0.lanes_eq(answer.0);
     // Refers to guess
@@ -118,29 +108,6 @@ pub fn check_guess_simd_slow(guess: SimdWord, answer: SimdWord) -> ResponseInt {
 }
 
 pub fn check_guess_simd_simple_guess(guess: SimdWord, answer: SimdWord) -> ResponseInt {
-    const POW_3: u8x8 = u8x8::from_array([
-        3u8.pow(4),
-        3u8.pow(3),
-        3u8.pow(2),
-        3u8.pow(1),
-        3u8.pow(0),
-        0,
-        0,
-        0,
-    ]);
-    const POW_3X2: u8x8 = u8x8::from_array([
-        2 * 3u8.pow(4),
-        2 * 3u8.pow(3),
-        2 * 3u8.pow(2),
-        2 * 3u8.pow(1),
-        2 * 3u8.pow(0),
-        2 * 0,
-        0,
-        0,
-    ]);
-
-    const ZERO: u8x8 = u8x8::splat(0);
-
     // Refers to both guess and answer
     let correct = guess.0.lanes_eq(answer.0);
     // Refers to guess
@@ -149,41 +116,31 @@ pub fn check_guess_simd_simple_guess(guess: SimdWord, answer: SimdWord) -> Respo
     ResponseInt(cell_values.horizontal_sum())
 }
 
+fn from_signed(x: i8x8) -> u8x8 {
+    let arr = x.as_array();
+    let ptr = (arr as *const [i8; 8]) as *const [u8; 8];
+    u8x8::from_array(unsafe { *ptr })
+}
+
 pub fn check_guess_simd_simple_answer(guess: SimdWord, answer: SimdWord) -> ResponseInt {
-    const POW_3: u8x8 = u8x8::from_array([
-        3u8.pow(4),
-        3u8.pow(3),
-        3u8.pow(2),
-        3u8.pow(1),
-        3u8.pow(0),
-        0,
-        0,
-        0,
-    ]);
-    const POW_3X2: u8x8 = u8x8::from_array([
-        2 * 3u8.pow(4),
-        2 * 3u8.pow(3),
-        2 * 3u8.pow(2),
-        2 * 3u8.pow(1),
-        2 * 3u8.pow(0),
-        2 * 0,
-        0,
-        0,
-    ]);
-
-    const ZERO: u8x8 = u8x8::splat(0);
-
     // Refers to both guess and answer
     let correct = guess.0.lanes_eq(answer.0);
 
-    let correct_guesses = correct.select(guess.0, u8x8::splat(255));
-    let bad_moves = moved(guess, SimdWord(correct_guesses));
+    let unused_answer = from_signed((!correct).to_int()) & answer.0;
     // Refers to guess
-    let mut moved = moved(guess, answer);
+    let mut moved = moved(guess, SimdWord(unused_answer));
     moved &= !repeats(guess);
-    moved &= !bad_moves;
     let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
     ResponseInt(cell_values.horizontal_sum())
+}
+
+pub fn moved_or_correct(guess: SimdWord, answer: SimdWord) -> mask8x8 {
+    let mut moved = guess.0.lanes_eq(u8x8::splat(answer.0.to_array()[0]));
+    moved |= guess.0.lanes_eq(u8x8::splat(answer.0.to_array()[1]));
+    moved |= guess.0.lanes_eq(u8x8::splat(answer.0.to_array()[2]));
+    moved |= guess.0.lanes_eq(u8x8::splat(answer.0.to_array()[3]));
+    moved |= guess.0.lanes_eq(u8x8::splat(answer.0.to_array()[4]));
+    moved
 }
 
 pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
@@ -218,6 +175,18 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
+
+    fn safe_rotate_mask<T: MaskElement, const LANES: usize, const N: usize>(
+        m: Mask<T, LANES>,
+    ) -> Mask<T, LANES>
+    where
+        T: MaskElement,
+        LaneCount<LANES>: SupportedLaneCount,
+    {
+        let v = m.to_int();
+        let vr = v.rotate_lanes_right::<N>();
+        Mask::<T, LANES>::from_int(vr)
+    }
 
     #[test]
     fn test_rotate_mask_safety() {
