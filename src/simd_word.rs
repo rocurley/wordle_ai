@@ -65,7 +65,9 @@ impl SimdWord {
             0,
             0,
         ]));
-        if repeats(out).any() {
+        if (repeats(out) & mask8x8::from_array([true, true, true, true, true, false, false, false]))
+            .any()
+        {
             out.0.as_mut_array()[7] = 255;
         }
         out
@@ -150,7 +152,7 @@ pub fn moved_or_correct(guess: SimdWord, answer: SimdWord) -> mask8x8 {
     moved
 }
 
-pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
+fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
     let rot1 = simd_swizzle!(answer.0, [4, 0, 1, 2, 3, 5, 6, 7]);
     // Refers to guess
     let mut moved = guess.0.lanes_eq(rot1);
@@ -165,19 +167,6 @@ pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
 
 // TODO: why is HEAD so much worse than HEAD^
 fn repeats(SimdWord(word): SimdWord) -> mask8x8 {
-    let rot1 = word.rotate_lanes_right::<1>();
-    let mut repeated = word.lanes_eq(rot1);
-    let rot2 = word.rotate_lanes_right::<2>();
-    repeated |= word.lanes_eq(rot2);
-    let rot3 = word.rotate_lanes_right::<3>();
-    repeated |= word.lanes_eq(rot3);
-    // Can't rotate by 4 or we'll bring the last letter around to first.
-    let first_last = repeated.test(4) || word.as_array()[0] == word.as_array()[4];
-    repeated.set(4, first_last);
-    repeated & mask8x8::from_array([true, true, true, true, true, false, false, false])
-}
-
-fn repeats_2(SimdWord(word): SimdWord) -> mask8x8 {
     let rights1 = simd_swizzle!(word, [7, 0, 0, 0, 0, 5, 6, 7]);
     let mut repeated = word.lanes_eq(rights1);
     let rights2 = simd_swizzle!(word, [7, 7, 1, 1, 1, 5, 6, 7]);
@@ -272,7 +261,7 @@ mod tests {
         let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
         for (&guess, &simd_guess) in words.iter().zip(&simd_words) {
             for (&answer, &simd_answer) in words.iter().zip(&simd_words) {
-                if repeats(simd_guess).any() {
+                if simd_guess.has_repeats() {
                     continue;
                 }
                 assert_eq!(
@@ -295,7 +284,7 @@ mod tests {
         let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
         for (&guess, &simd_guess) in words.iter().zip(&simd_words) {
             for (&answer, &simd_answer) in words.iter().zip(&simd_words) {
-                if repeats(simd_answer).any() {
+                if simd_answer.has_repeats() {
                     continue;
                 }
                 assert_eq!(
@@ -326,6 +315,32 @@ mod tests {
                 }
                 assert_eq!(has_repeat, simd_repeats.test(i), "{}[{}]", word, i);
             }
+        }
+    }
+
+    #[test]
+    fn test_has_repeats() {
+        let file = File::open("short.txt").unwrap();
+        let words: Vec<Word> = BufReader::new(file)
+            .lines()
+            .map(|line| line.unwrap().parse().unwrap())
+            .collect();
+        let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
+        for (&word, &simd_word) in words.iter().zip(&simd_words) {
+            let mut has_repeat = false;
+            for i in 0..5 {
+                for j in 0..i {
+                    has_repeat |= word.0[i] == word.0[j]
+                }
+            }
+            assert_eq!(
+                has_repeat,
+                simd_word.has_repeats(),
+                "{} ({:?}), repeats: {:?}",
+                word,
+                simd_word.0,
+                repeats(simd_word),
+            );
         }
     }
 
