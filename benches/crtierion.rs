@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use wordle_ai_lib::{
-    alist_get_or_else, check_guess, check_guess_simd, check_guess_simd_simple_guess, SimdWord, Word,
+    alist_get_or_else, check_guess, check_guess_simd, check_guess_simd_simple_answer,
+    check_guess_simd_simple_guess, SimdWord, Word,
 };
 
 fn consume_buckets<'a, I: Iterator<Item = (usize, &'a [usize])>>(iter: I) -> usize {
@@ -34,7 +35,8 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         .map(|line| line.unwrap().parse().unwrap())
         .collect();
     let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
-    c.bench_function("check_guess", |b| {
+    let mut check_guess_group = c.benchmark_group("check_guess");
+    check_guess_group.bench_function("non-simd", |b| {
         b.iter(|| {
             let mut prevent_noop = 0;
             for &guess in &words {
@@ -46,7 +48,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             prevent_noop
         })
     });
-    c.bench_function("check_guess_simd", |b| {
+    check_guess_group.bench_function("simd", |b| {
         b.iter(|| {
             let mut prevent_noop = 0;
             for &guess in &simd_words {
@@ -58,7 +60,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             prevent_noop
         })
     });
-    c.bench_function("check_guess_simd_simple_guess", |b| {
+    check_guess_group.bench_function("simd_simple_guess", |b| {
         b.iter(|| {
             let mut prevent_noop = 0;
             for &guess in &simd_words {
@@ -72,6 +74,21 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             prevent_noop
         })
     });
+    check_guess_group.bench_function("simd_simple_answer", |b| {
+        b.iter(|| {
+            let mut prevent_noop = 0;
+            for &guess in &simd_words {
+                for &answer in &simd_words {
+                    // Note that this won't actually be right, since we don't check the
+                    // precondition. But that's okay, we just care about speed.
+                    let response = check_guess_simd_simple_answer(guess, answer);
+                    prevent_noop += response.0 as i32;
+                }
+            }
+            prevent_noop
+        })
+    });
+    check_guess_group.finish();
     const N_BUCKETS: usize = 3usize.pow(5);
     const BUCKET_SIZE: usize = 2314;
     let values: Vec<usize> = (0..100).map(|i| i * 23).collect();

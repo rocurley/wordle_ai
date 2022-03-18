@@ -201,16 +201,36 @@ impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
     }
 }
 
+pub enum Guess {
+    Unique(SimdWord),
+    Repeating(GuessIx),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimdWord(u8x8);
 impl SimdWord {
     pub fn from_word(word: Word) -> Self {
         let Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)]) = word;
-        SimdWord(u8x8::from_array([l0, l1, l2, l3, l4, 0, 0, 0]))
+        SimdWord(u8x8::from_array([
+            l0 + 1,
+            l1 + 1,
+            l2 + 1,
+            l3 + 1,
+            l4 + 1,
+            0,
+            0,
+            0,
+        ]))
     }
     pub fn to_word(self) -> Word {
         let &[l0, l1, l2, l3, l4, _, _, _] = self.0.as_array();
-        Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)])
+        Word([
+            Letter(l0 - 1),
+            Letter(l1 - 1),
+            Letter(l2 - 1),
+            Letter(l3 - 1),
+            Letter(l4 - 1),
+        ])
     }
 }
 
@@ -287,6 +307,43 @@ pub fn check_guess_simd_simple_guess(guess: SimdWord, answer: SimdWord) -> Respo
     ResponseInt(cell_values.horizontal_sum())
 }
 
+pub fn check_guess_simd_simple_answer(guess: SimdWord, answer: SimdWord) -> ResponseInt {
+    const POW_3: u8x8 = u8x8::from_array([
+        3u8.pow(4),
+        3u8.pow(3),
+        3u8.pow(2),
+        3u8.pow(1),
+        3u8.pow(0),
+        0,
+        0,
+        0,
+    ]);
+    const POW_3X2: u8x8 = u8x8::from_array([
+        2 * 3u8.pow(4),
+        2 * 3u8.pow(3),
+        2 * 3u8.pow(2),
+        2 * 3u8.pow(1),
+        2 * 3u8.pow(0),
+        2 * 0,
+        0,
+        0,
+    ]);
+
+    const ZERO: u8x8 = u8x8::splat(0);
+
+    // Refers to both guess and answer
+    let correct = guess.0.lanes_eq(answer.0);
+
+    let correct_guesses = correct.select(guess.0, u8x8::splat(255));
+    let bad_moves = moved(guess, SimdWord(correct_guesses));
+    // Refers to guess
+    let mut moved = moved(guess, answer);
+    moved &= !repeats(guess);
+    moved &= !bad_moves;
+    let cell_values = correct.select(ZERO, moved.select(POW_3, POW_3X2));
+    ResponseInt(cell_values.horizontal_sum())
+}
+
 pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
     let rot1 = simd_swizzle!(answer.0, [4, 0, 1, 2, 3, 5, 6, 7]);
     // Refers to guess
@@ -298,6 +355,19 @@ pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
     let rot4 = simd_swizzle!(answer.0, [1, 2, 3, 4, 0, 5, 6, 7]);
     moved |= guess.0.lanes_eq(rot4);
     moved
+}
+
+fn repeats(SimdWord(word): SimdWord) -> mask8x8 {
+    let rot1 = word.rotate_lanes_right::<1>();
+    let mut repeated = word.lanes_eq(rot1);
+    let rot2 = word.rotate_lanes_right::<2>();
+    repeated |= word.lanes_eq(rot2);
+    let rot3 = word.rotate_lanes_right::<3>();
+    repeated |= word.lanes_eq(rot3);
+    // Can't rotate by 4 or we'll bring the last letter around to first.
+    let first_last = repeated.test(4) || word.as_array()[0] == word.as_array()[4];
+    repeated.set(4, first_last);
+    repeated & mask8x8::from_array([true, true, true, true, true, false, false, false])
 }
 
 pub struct VecPool<T> {
@@ -842,11 +912,34 @@ mod tests {
         let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
         for (&guess, &simd_guess) in words.iter().zip(&simd_words) {
             for (&answer, &simd_answer) in words.iter().zip(&simd_words) {
-                if moved(simd_guess, simd_answer).any() {
+                if repeats(simd_guess).any() {
                     continue;
                 }
                 assert_eq!(
                     Response::from_int(check_guess_simd_simple_guess(simd_guess, simd_answer)),
+                    check_guess(guess, answer),
+                    "Guess: {}, Answer: {}",
+                    guess,
+                    answer
+                );
+            }
+        }
+    }
+    #[test]
+    fn test_check_guess_simd_simple_answer() {
+        let file = File::open("short.txt").unwrap();
+        let words: Vec<Word> = BufReader::new(file)
+            .lines()
+            .map(|line| line.unwrap().parse().unwrap())
+            .collect();
+        let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
+        for (&guess, &simd_guess) in words.iter().zip(&simd_words) {
+            for (&answer, &simd_answer) in words.iter().zip(&simd_words) {
+                if repeats(simd_answer).any() {
+                    continue;
+                }
+                assert_eq!(
+                    Response::from_int(check_guess_simd_simple_answer(simd_guess, simd_answer)),
                     check_guess(guess, answer),
                     "Guess: {}, Answer: {}",
                     guess,
