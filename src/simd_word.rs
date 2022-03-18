@@ -55,7 +55,7 @@ pub struct SimdWord(u8x8);
 impl SimdWord {
     pub fn from_word(word: Word) -> Self {
         let Word([Letter(l0), Letter(l1), Letter(l2), Letter(l3), Letter(l4)]) = word;
-        SimdWord(u8x8::from_array([
+        let mut out = SimdWord(u8x8::from_array([
             l0 + 1,
             l1 + 1,
             l2 + 1,
@@ -64,7 +64,11 @@ impl SimdWord {
             0,
             0,
             0,
-        ]))
+        ]));
+        if repeats(out).any() {
+            out.0.as_mut_array()[7] = 255;
+        }
+        out
     }
     pub fn to_word(self) -> Word {
         let &[l0, l1, l2, l3, l4, _, _, _] = self.0.as_array();
@@ -76,14 +80,17 @@ impl SimdWord {
             Letter(l4 - 1),
         ])
     }
+    pub fn has_repeats(self) -> bool {
+        self.0.as_array()[7] > 0
+    }
 }
 
 pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
-    if !repeats(guess).any() {
+    if !guess.has_repeats() {
         return check_guess_simd_simple_guess(guess, answer);
     }
 
-    if !repeats(answer).any() {
+    if !answer.has_repeats() {
         return check_guess_simd_simple_answer(guess, answer);
     }
     check_guess_simd_slow(guess, answer)
@@ -156,6 +163,7 @@ pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
     moved
 }
 
+// TODO: why is HEAD so much worse than HEAD^
 fn repeats(SimdWord(word): SimdWord) -> mask8x8 {
     let rot1 = word.rotate_lanes_right::<1>();
     let mut repeated = word.lanes_eq(rot1);
@@ -167,6 +175,18 @@ fn repeats(SimdWord(word): SimdWord) -> mask8x8 {
     let first_last = repeated.test(4) || word.as_array()[0] == word.as_array()[4];
     repeated.set(4, first_last);
     repeated & mask8x8::from_array([true, true, true, true, true, false, false, false])
+}
+
+fn repeats_2(SimdWord(word): SimdWord) -> mask8x8 {
+    let rights1 = simd_swizzle!(word, [7, 0, 0, 0, 0, 5, 6, 7]);
+    let mut repeated = word.lanes_eq(rights1);
+    let rights2 = simd_swizzle!(word, [7, 7, 1, 1, 1, 5, 6, 7]);
+    repeated |= word.lanes_eq(rights2);
+    let rights3 = simd_swizzle!(word, [7, 7, 7, 2, 2, 5, 6, 7]);
+    repeated |= word.lanes_eq(rights3);
+    let rights4 = simd_swizzle!(word, [7, 7, 7, 7, 3, 5, 6, 7]);
+    repeated |= word.lanes_eq(rights4);
+    repeated
 }
 
 #[cfg(test)]
@@ -285,6 +305,26 @@ mod tests {
                     guess,
                     answer
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn test_repeats() {
+        let file = File::open("short.txt").unwrap();
+        let words: Vec<Word> = BufReader::new(file)
+            .lines()
+            .map(|line| line.unwrap().parse().unwrap())
+            .collect();
+        let simd_words: Vec<SimdWord> = words.iter().copied().map(SimdWord::from_word).collect();
+        for (&word, &simd_word) in words.iter().zip(&simd_words) {
+            let simd_repeats = repeats(simd_word);
+            for i in 0..5 {
+                let mut has_repeat = false;
+                for j in 0..i {
+                    has_repeat |= word.0[i] == word.0[j]
+                }
+                assert_eq!(has_repeat, simd_repeats.test(i), "{}[{}]", word, i);
             }
         }
     }
