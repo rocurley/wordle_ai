@@ -235,6 +235,17 @@ impl SimdWord {
 }
 
 pub fn check_guess_simd(guess: SimdWord, answer: SimdWord) -> ResponseInt {
+    if !repeats(guess).any() {
+        return check_guess_simd_simple_guess(guess, answer);
+    }
+
+    if !repeats(answer).any() {
+        return check_guess_simd_simple_answer(guess, answer);
+    }
+    check_guess_simd_slow(guess, answer)
+}
+
+pub fn check_guess_simd_slow(guess: SimdWord, answer: SimdWord) -> ResponseInt {
     const POW_3: u8x8 = u8x8::from_array([
         3u8.pow(4),
         3u8.pow(3),

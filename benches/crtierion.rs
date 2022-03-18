@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use wordle_ai_lib::{
     alist_get_or_else, check_guess, check_guess_simd, check_guess_simd_simple_answer,
-    check_guess_simd_simple_guess, SimdWord, Word,
+    check_guess_simd_simple_guess, check_guess_simd_slow, SimdWord, Word,
 };
 
 fn consume_buckets<'a, I: Iterator<Item = (usize, &'a [usize])>>(iter: I) -> usize {
@@ -22,10 +22,6 @@ fn consume_pair_buckets<'a, I: Iterator<Item = &'a [(usize, usize)]>>(iter: I) -
             k * kvs.into_iter().map(|(_, v)| v).sum::<usize>()
         })
         .sum()
-}
-
-fn consume_ungrouped_buckets<'a, I: Iterator<Item = (usize, usize)>>(iter: I) -> usize {
-    iter.into_iter().map(|(k, v)| k * v).sum()
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
@@ -54,6 +50,18 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             for &guess in &simd_words {
                 for &answer in &simd_words {
                     let response = check_guess_simd(guess, answer);
+                    prevent_noop += response.0 as i32;
+                }
+            }
+            prevent_noop
+        })
+    });
+    check_guess_group.bench_function("simd_slow", |b| {
+        b.iter(|| {
+            let mut prevent_noop = 0;
+            for &guess in &simd_words {
+                for &answer in &simd_words {
+                    let response = check_guess_simd_slow(guess, answer);
                     prevent_noop += response.0 as i32;
                 }
             }
