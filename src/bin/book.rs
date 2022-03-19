@@ -1,6 +1,7 @@
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::ops::Bound;
 use wordle_ai_lib::{Minimaxer, Word};
 
 fn main() {
@@ -9,7 +10,15 @@ fn main() {
     let guesses = read_words(&args[2]);
     let answers = read_words(&args[3]);
     let minimaxer = Minimaxer::new(answers, guesses);
-    minimaxer.book(depth, false);
+    let start = match args.get(4) {
+        None => Bound::Unbounded,
+        Some(n) => Bound::Included(n.parse().unwrap()),
+    };
+    let end = match args.get(5) {
+        None => Bound::Unbounded,
+        Some(n) => Bound::Excluded(n.parse().unwrap()),
+    };
+    minimaxer.book(depth, false, (start, end));
 }
 
 fn read_words(path: &str) -> Vec<Word> {

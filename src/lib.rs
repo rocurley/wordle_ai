@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Bound;
 use std::ops::{Deref, DerefMut, Index};
 use std::str::FromStr;
 pub mod simd_word;
@@ -492,11 +493,21 @@ impl Minimaxer {
         //dbg!(cache.map);
         trace.hydrate(&self.guesses, &self.answers)
     }
-    pub fn book(&self, search_depth: usize, verbose: bool) -> Vec<(Word, HydratedMinimaxTrace)> {
+    pub fn book(
+        &self,
+        search_depth: usize,
+        verbose: bool,
+        range: (Bound<usize>, Bound<usize>),
+    ) -> Vec<(Word, HydratedMinimaxTrace)> {
         let len = self.guess_ixs.len();
         let mut cache = Cache::new();
         let mut out = Vec::new();
-        for (i, &guess) in self.guess_ixs[..1].iter().enumerate() {
+        let start = match range.0 {
+            Bound::Unbounded => 0,
+            Bound::Included(x) => x,
+            Bound::Excluded(x) => x + 1,
+        };
+        for (i, &guess) in self.guess_ixs[range].iter().enumerate() {
             let max_trace = self
                 .maximize(
                     &mut cache,
@@ -511,7 +522,7 @@ impl Minimaxer {
                 .hydrate(&self.guesses, &self.answers);
             let guess = self.guesses[guess.0];
             println!("################");
-            println!("{}/{}", i + 1, len);
+            println!("{}/{}", i + start + 1, len);
             print!("{}", max_trace);
             out.push((guess, max_trace));
         }
