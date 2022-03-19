@@ -9,7 +9,7 @@ fn main() {
     let guesses = read_words(&args[2]);
     let answers = read_words(&args[3]);
     let minimaxer = Minimaxer::new(answers, guesses);
-    minimaxer.book(depth, true);
+    minimaxer.book(depth, false);
 }
 
 fn read_words(path: &str) -> Vec<Word> {

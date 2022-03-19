@@ -3,6 +3,7 @@
 #![feature(decl_macro)]
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -366,6 +367,13 @@ impl Display for HydratedMinimaxTrace {
                 frame.remaining_answers.len()
             )?
         }
+        if matches!(self.score, Score::Complete { .. }) {
+            write!(
+                f,
+                "Answer:    {}\n",
+                self.frames.last().unwrap().remaining_answers[0]
+            )?;
+        }
         Ok(())
     }
 }
@@ -488,7 +496,7 @@ impl Minimaxer {
         let len = self.guess_ixs.len();
         let mut cache = Cache::new();
         let mut out = Vec::new();
-        for (i, &guess) in self.guess_ixs.iter().enumerate() {
+        for (i, &guess) in self.guess_ixs[..1].iter().enumerate() {
             let max_trace = self
                 .maximize(
                     &mut cache,
@@ -502,11 +510,9 @@ impl Minimaxer {
                 .unwrap()
                 .hydrate(&self.guesses, &self.answers);
             let guess = self.guesses[guess.0];
-            if verbose {
-                println!("################");
-                println!("{}/{}", i + 1, len);
-                print!("{}", max_trace);
-            }
+            println!("################");
+            println!("{}/{}", i + 1, len);
+            print!("{}", max_trace);
             out.push((guess, max_trace));
         }
         out
@@ -561,9 +567,33 @@ impl Minimaxer {
         if verbose {
             println!("");
         }
-        for (i, &guess) in self.guess_ixs.iter().enumerate() {
+        let guesses_sorted: Vec<GuessIx>;
+        let guesses = if remaining_depth > 1 {
+            let mut scored_guesses: Vec<(Score, GuessIx)> = self
+                .guess_ixs
+                .iter()
+                .filter_map(|&guess| {
+                    let single_ply = self.maximize(
+                        minimize_cache,
+                        guess,
+                        depth,
+                        1,
+                        possible_answers,
+                        None,
+                        false,
+                    )?;
+                    Some((single_ply.score, guess))
+                })
+                .collect();
+            scored_guesses.sort_by_key(|&(score, _)| score);
+            guesses_sorted = scored_guesses.into_iter().map(|(_, guess)| guess).collect();
+            &guesses_sorted
+        } else {
+            &self.guess_ixs
+        };
+        for (i, &guess) in guesses.into_iter().enumerate() {
             if verbose {
-                print!("\x1b[2k\r Depth {}: {:0>4}/{:0>4}", depth, i, len);
+                print!("\x1b[2k\r Depth {}: {:0>5}/{:0>5}", depth, i, len);
             }
             let max_max = min_trace.as_ref().map(|tr| tr.score);
             let max_trace = self.maximize(
@@ -620,21 +650,22 @@ impl Minimaxer {
         max_max: Option<Score>,
         verbose: bool,
     ) -> Option<MinimaxTrace<'static>> {
-        let possible_responses =
+        let mut possible_responses =
             bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
         if possible_responses.len() == 1 {
             // Useless guess
             return None;
         }
         let mut max_trace: Option<MinimaxTrace> = None;
-        // Find max score over all responses
         let len = possible_responses.len();
         if verbose {
             println!("");
         }
+        possible_responses.sort_by_key(|(_, remaining_answers)| Reverse(remaining_answers.len()));
+        // Find max score over all responses
         for (i, (response, remaining_answers)) in possible_responses.into_iter().enumerate() {
             if verbose {
-                print!("\x1b[2k\r Depth {}: {:0>4}/{:0>4}", depth, i, len);
+                print!("\x1b[2k\r Depth {}: {:0>5}/{:0>5}", depth, i, len);
             }
             let min_min = max_trace.as_ref().map(|tr| tr.score);
             let child_result = self.minimize(
