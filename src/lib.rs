@@ -452,6 +452,11 @@ impl Cache {
     }
 }
 
+fn pop_line() {
+    print!("\x1b[2K");
+    print!("\x1b[1F");
+}
+
 impl Minimaxer {
     pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
         let pools = AllPools::new();
@@ -553,9 +558,12 @@ impl Minimaxer {
         let len = self.guess_ixs.len();
         let mut min_trace: Option<MinimaxTrace> = None;
         // Find min score over all guesses
+        if verbose {
+            println!("");
+        }
         for (i, &guess) in self.guess_ixs.iter().enumerate() {
             if verbose {
-                println!("{}/{}", i, len);
+                print!("\x1b[2k\r Depth {}: {:0>4}/{:0>4}", depth, i, len);
             }
             let max_max = min_trace.as_ref().map(|tr| tr.score);
             let max_trace = self.maximize(
@@ -574,6 +582,9 @@ impl Minimaxer {
                             score: max_trace.score,
                         };
                         minimize_cache.insert(cache_key, result.clone());
+                        if verbose {
+                            pop_line();
+                        }
                         return result;
                     }
                 }
@@ -593,6 +604,9 @@ impl Minimaxer {
         let trace = min_trace.expect("min_trace must get set at least once");
         let result = MinimaxResult::Complete { trace };
         minimize_cache.insert(cache_key, result.clone());
+        if verbose {
+            pop_line();
+        }
         result
     }
 
@@ -614,7 +628,14 @@ impl Minimaxer {
         }
         let mut max_trace: Option<MinimaxTrace> = None;
         // Find max score over all responses
-        for (response, remaining_answers) in possible_responses {
+        let len = possible_responses.len();
+        if verbose {
+            println!("");
+        }
+        for (i, (response, remaining_answers)) in possible_responses.into_iter().enumerate() {
+            if verbose {
+                print!("\x1b[2k\r Depth {}: {:0>4}/{:0>4}", depth, i, len);
+            }
             let min_min = max_trace.as_ref().map(|tr| tr.score);
             let child_result = self.minimize(
                 minimize_cache,
@@ -622,7 +643,7 @@ impl Minimaxer {
                 remaining_depth - 1,
                 &remaining_answers,
                 min_min,
-                false,
+                verbose,
             );
             let mut child_trace = if let MinimaxResult::Complete { trace } = child_result {
                 trace
@@ -631,11 +652,11 @@ impl Minimaxer {
             };
             if let Some(max_max) = max_max {
                 if child_trace.score > max_max {
-                    if verbose {
-                        println!("pruned!");
-                    }
                     // Note that this can only trigger if min_trace is populated, so min_trace
                     // must be set at least once.
+                    if verbose {
+                        pop_line();
+                    }
                     return None;
                 }
             }
@@ -651,6 +672,9 @@ impl Minimaxer {
                 child_trace.push(new_frame);
                 max_trace.replace(child_trace);
             }
+        }
+        if verbose {
+            pop_line();
         }
         max_trace
     }
