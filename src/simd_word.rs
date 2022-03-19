@@ -152,28 +152,40 @@ pub fn moved_or_correct(guess: SimdWord, answer: SimdWord) -> mask8x8 {
     moved
 }
 
-fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
-    let rot1 = simd_swizzle!(answer.0, [4, 0, 1, 2, 3, 5, 6, 7]);
+// This compiles down to 1 instruction, since the instruction simd_swizzle compiles down to can
+// also clear a lane.
+macro word_swizzle(
+        $vector:expr, [$i0:expr, $i1:expr, $i2:expr, $i3:expr, $i4:expr $(,)?] $(,)?
+    ) {{
+    let mut out = simd_swizzle!($vector, [$i0, $i1, $i2, $i3, $i4, 5, 6, 7]);
+    let arr = out.as_mut_array();
+    arr[5] = 0;
+    arr[6] = 0;
+    arr[7] = 0;
+    out
+}}
+
+pub fn moved(guess: SimdWord, answer: SimdWord) -> mask8x8 {
+    let rot1 = word_swizzle!(answer.0, [4, 0, 1, 2, 3]);
     // Refers to guess
     let mut moved = guess.0.lanes_eq(rot1);
-    let rot2 = simd_swizzle!(answer.0, [3, 4, 0, 1, 2, 5, 6, 7]);
+    let rot2 = word_swizzle!(answer.0, [3, 4, 0, 1, 2]);
     moved |= guess.0.lanes_eq(rot2);
-    let rot3 = simd_swizzle!(answer.0, [2, 3, 4, 0, 1, 5, 6, 7]);
+    let rot3 = word_swizzle!(answer.0, [2, 3, 4, 0, 1]);
     moved |= guess.0.lanes_eq(rot3);
-    let rot4 = simd_swizzle!(answer.0, [1, 2, 3, 4, 0, 5, 6, 7]);
+    let rot4 = word_swizzle!(answer.0, [1, 2, 3, 4, 0]);
     moved |= guess.0.lanes_eq(rot4);
     moved
 }
 
-// TODO: why is HEAD so much worse than HEAD^
 fn repeats(SimdWord(word): SimdWord) -> mask8x8 {
-    let rights1 = simd_swizzle!(word, [7, 0, 0, 0, 0, 5, 6, 7]);
+    let rights1 = word_swizzle!(word, [7, 0, 0, 0, 0]);
     let mut repeated = word.lanes_eq(rights1);
-    let rights2 = simd_swizzle!(word, [7, 7, 1, 1, 1, 5, 6, 7]);
+    let rights2 = word_swizzle!(word, [7, 7, 1, 1, 1]);
     repeated |= word.lanes_eq(rights2);
-    let rights3 = simd_swizzle!(word, [7, 7, 7, 2, 2, 5, 6, 7]);
+    let rights3 = word_swizzle!(word, [7, 7, 7, 2, 2]);
     repeated |= word.lanes_eq(rights3);
-    let rights4 = simd_swizzle!(word, [7, 7, 7, 7, 3, 5, 6, 7]);
+    let rights4 = word_swizzle!(word, [7, 7, 7, 7, 3]);
     repeated |= word.lanes_eq(rights4);
     repeated
 }

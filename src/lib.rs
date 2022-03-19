@@ -1,5 +1,6 @@
 #![feature(type_alias_impl_trait)]
 #![feature(portable_simd)]
+#![feature(decl_macro)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
