@@ -11,6 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Bound;
 use std::ops::{Deref, DerefMut, Index};
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 pub mod simd_word;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -192,14 +193,14 @@ impl ResponseLUT {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GuessIx(pub usize);
+pub struct GuessIx(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AnswerIx(pub usize);
+pub struct AnswerIx(pub u16);
 
 impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
     type Output = ResponseInt;
     fn index(&self, (GuessIx(i), AnswerIx(j)): (GuessIx, AnswerIx)) -> &Self::Output {
-        &self.table[i * self.n_answers + j]
+        &self.table[i as usize * self.n_answers + j as usize]
     }
 }
 
@@ -338,10 +339,10 @@ impl<'pool> MinimaxFrame<'pool> {
             response,
             remaining_answers,
         } = self;
-        let guess = guesses[guess.0];
+        let guess = guesses[guess.0 as usize];
         let remaining_answers = remaining_answers
             .into_iter()
-            .map(|answer| answers[answer.0])
+            .map(|answer| answers[answer.0 as usize])
             .collect();
         HydratedMinimaxFrame {
             guess,
@@ -433,6 +434,7 @@ pub enum MinimaxResult {
 struct Cache {
     map: HashMap<MinCacheKey, MinimaxResult>,
     hits: [usize; 6],
+    bad_hits: [usize; 6],
     misses: [usize; 6],
 }
 
@@ -441,6 +443,7 @@ impl Cache {
         Cache {
             map: HashMap::new(),
             hits: [0; 6],
+            bad_hits: [0; 6],
             misses: [0; 6],
         }
     }
@@ -470,8 +473,8 @@ impl Minimaxer {
     pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
         let pools = AllPools::new();
         let lut = ResponseLUT::new(&guesses, &answers);
-        let guess_ixs: Vec<GuessIx> = (0..guesses.len()).map(|i| GuessIx(i)).collect();
-        let answer_ixs: Vec<AnswerIx> = (0..answers.len()).map(|i| AnswerIx(i)).collect();
+        let guess_ixs: Vec<GuessIx> = (0..guesses.len() as u16).map(|i| GuessIx(i)).collect();
+        let answer_ixs: Vec<AnswerIx> = (0..answers.len() as u16).map(|i| AnswerIx(i)).collect();
         Minimaxer {
             pools,
             lut,
@@ -500,7 +503,6 @@ impl Minimaxer {
         range: (Bound<usize>, Bound<usize>),
     ) -> Vec<(Word, HydratedMinimaxTrace)> {
         let len = self.guess_ixs.len();
-        let mut cache = Cache::new();
         let mut out = Vec::new();
         let start = match range.0 {
             Bound::Unbounded => 0,
@@ -508,6 +510,8 @@ impl Minimaxer {
             Bound::Excluded(x) => x + 1,
         };
         for (i, &guess) in self.guess_ixs[range].iter().enumerate() {
+            let t_start = Instant::now();
+            let mut cache = Cache::new();
             let max_trace = self
                 .maximize(
                     &mut cache,
@@ -520,12 +524,17 @@ impl Minimaxer {
                 )
                 .unwrap()
                 .hydrate(&self.guesses, &self.answers);
-            let guess = self.guesses[guess.0];
+            let guess = self.guesses[guess.0 as usize];
             println!("################");
-            println!("{}/{}", i + start + 1, len);
+            println!("{}/{} ({:#?})", i + start + 1, len, t_start.elapsed());
             print!("{}", max_trace);
             out.push((guess, max_trace));
         }
+        /*
+        dbg!(cache.len(), cache.hits, cache.misses, cache.bad_hits);
+        let cache_total_size: usize = cache.map.keys().map(|k| k.possible_answers.len()).sum();
+        dbg!(cache_total_size);
+        */
         out
     }
     fn minimize(
@@ -567,6 +576,8 @@ impl Minimaxer {
                     if let Some(min_min) = min_min {
                         if *score < min_min {
                             return cached.clone();
+                        } else {
+                            minimize_cache.bad_hits[depth] += 1;
                         }
                     }
                 }
