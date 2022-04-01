@@ -2,7 +2,7 @@
 #![feature(portable_simd)]
 #![feature(decl_macro)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
@@ -206,21 +206,37 @@ impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
 
 pub struct VecPool<T> {
     vecs: RefCell<Vec<Vec<T>>>,
+    take_count: Cell<usize>,
+    new_count: Cell<usize>,
 }
 
 impl<'a, T> VecPool<T> {
     fn take_vec(&'a self) -> PoolVec<T> {
-        let vec = self.vecs.borrow_mut().pop().unwrap_or_else(Vec::new);
+        let mut vecs = self.vecs.borrow_mut();
+        if vecs.len() == 0 {
+            self.new_count.set(self.new_count.get() + 1);
+        }
+        let vec = vecs.pop().unwrap_or_else(Vec::new);
+        self.take_count.set(self.take_count.get() + 1);
         PoolVec { pool: self, vec }
     }
     pub fn new() -> Self {
         VecPool {
             vecs: RefCell::new(Vec::new()),
+            take_count: Cell::new(0),
+            new_count: Cell::new(0),
         }
+    }
+    fn debug_info(&self) {
+        println!("Pool type: {}", std::any::type_name::<T>());
+        println!("Available vectors: {}", self.vecs.borrow().len());
+        println!("Used vectors: {}", self.take_count.get());
+        println!("Allocated vectors: {}", self.new_count.get());
+        let total_size: usize = self.vecs.borrow().iter().map(|v| v.capacity()).sum();
+        println!("Total vector size: {}", total_size);
     }
 }
 
-#[derive(Clone)]
 pub struct PoolVec<'a, T> {
     pool: &'a VecPool<T>,
     vec: Vec<T>,
@@ -231,6 +247,14 @@ impl<'a, T> Drop for PoolVec<'a, T> {
         let mut vec = std::mem::replace(&mut self.vec, Vec::new());
         vec.clear();
         self.pool.vecs.borrow_mut().push(vec);
+    }
+}
+
+impl<'a, T: Clone> Clone for PoolVec<'a, T> {
+    fn clone(&self) -> Self {
+        let mut cloned = self.pool.take_vec();
+        cloned.vec.extend_from_slice(&self.vec);
+        cloned
     }
 }
 
@@ -527,6 +551,7 @@ impl Minimaxer {
             let guess = self.guesses[guess.0 as usize];
             println!("################");
             println!("{}/{} ({:#?})", i + start + 1, len, t_start.elapsed());
+            self.pools.words_pool.debug_info();
             print!("{}", max_trace);
             out.push((guess, max_trace));
         }
