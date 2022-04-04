@@ -2,6 +2,7 @@
 #![feature(portable_simd)]
 #![feature(decl_macro)]
 
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -579,7 +580,7 @@ impl Minimaxer {
             .copied()
             .filter(|guess| !guesses_skipped.contains(&self.guesses[guess.0 as usize]))
             .collect();
-        let input = Arc::new(Mutex::new(input));
+        let input = Arc::new(Mutex::new(input.into_iter()));
         for _ in 0..n_threads {
             let Minimaxer {
                 pools: _,
@@ -614,12 +615,12 @@ impl Minimaxer {
         &self,
         search_depth: usize,
         verbose: bool,
-        input: &Mutex<Vec<GuessIx>>,
+        input: &Mutex<impl Iterator<Item = GuessIx>>,
         output: mpsc::Sender<(Word, HydratedMinimaxTrace)>,
     ) {
         loop {
             let mut guard = input.lock().unwrap();
-            let guess = if let Some(guess) = guard.pop() {
+            let guess = if let Some(guess) = guard.next() {
                 guess
             } else {
                 break;
