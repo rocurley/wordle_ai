@@ -2,7 +2,6 @@
 #![feature(portable_simd)]
 #![feature(decl_macro)]
 
-use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -14,8 +13,20 @@ use std::ops::{Deref, DerefMut, Index};
 use std::str::FromStr;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::thread::LocalKey;
 use std::time::Instant;
 pub mod simd_word;
+
+thread_local! {
+    static BAR: RefCell<f32> = RefCell::new(1.0);
+    static BUCKETS_POOL_INNER : VecPoolInner<(ResponseInt, PoolVec<AnswerIx>)> = VecPoolInner::new();
+    static WORDS_POOL_INNER : VecPoolInner<AnswerIx> = VecPoolInner::new();
+    static FRAMES_POOL_INNER : VecPoolInner<MinimaxFrame> = VecPoolInner::new();
+}
+
+static BUCKETS_POOL: VecPool<(ResponseInt, PoolVec<AnswerIx>)> = VecPool(&BUCKETS_POOL_INNER);
+static WORDS_POOL: VecPool<AnswerIx> = VecPool(&WORDS_POOL_INNER);
+static FRAMES_POOL: VecPool<MinimaxFrame> = VecPool(&FRAMES_POOL_INNER);
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Letter(u8);
@@ -208,53 +219,67 @@ impl Index<(GuessIx, AnswerIx)> for ResponseLUT {
     }
 }
 
-pub struct VecPool<T> {
+struct VecPoolInner<T> {
     vecs: RefCell<Vec<Vec<T>>>,
     take_count: Cell<usize>,
     new_count: Cell<usize>,
 }
 
-impl<'a, T> VecPool<T> {
-    fn take_vec(&'a self) -> PoolVec<T> {
-        let mut vecs = self.vecs.borrow_mut();
-        if vecs.len() == 0 {
-            self.new_count.set(self.new_count.get() + 1);
-        }
-        let vec = vecs.pop().unwrap_or_else(Vec::new);
-        self.take_count.set(self.take_count.get() + 1);
-        PoolVec { pool: self, vec }
-    }
+impl<T> VecPoolInner<T> {
     pub fn new() -> Self {
-        VecPool {
+        VecPoolInner {
             vecs: RefCell::new(Vec::new()),
             take_count: Cell::new(0),
             new_count: Cell::new(0),
         }
     }
-    fn debug_info(&self) {
-        println!("Pool type: {}", std::any::type_name::<T>());
-        println!("Available vectors: {}", self.vecs.borrow().len());
-        println!("Used vectors: {}", self.take_count.get());
-        println!("Allocated vectors: {}", self.new_count.get());
-        let total_size: usize = self.vecs.borrow().iter().map(|v| v.capacity()).sum();
-        println!("Total vector size: {}", total_size);
+}
+
+pub struct VecPool<T: 'static>(&'static LocalKey<VecPoolInner<T>>);
+
+impl<T> VecPool<T> {
+    fn take_vec(&'static self) -> PoolVec<T> {
+        self.0.with(|inner| {
+            let mut vecs = inner.vecs.borrow_mut();
+            if vecs.len() == 0 {
+                inner.new_count.set(inner.new_count.get() + 1);
+            }
+            let vec = vecs.pop().unwrap_or_else(Vec::new);
+            inner.take_count.set(inner.take_count.get() + 1);
+            PoolVec { pool: self, vec }
+        })
+    }
+    fn debug_info(&'static self) {
+        self.0.with(|inner| {
+            println!("Pool type: {}", std::any::type_name::<T>());
+            println!("Available vectors: {}", inner.vecs.borrow().len());
+            println!("Used vectors: {}", inner.take_count.get());
+            println!("Allocated vectors: {}", inner.new_count.get());
+            let total_size: usize = inner.vecs.borrow().iter().map(|v| v.capacity()).sum();
+            println!("Total vector size: {}", total_size);
+        });
+    }
+    fn return_vec(&'static self, vec: Vec<T>) {
+        self.0.with(|inner| {
+            inner.vecs.borrow_mut().push(vec);
+        });
     }
 }
 
-pub struct PoolVec<'a, T> {
-    pool: &'a VecPool<T>,
+pub struct PoolVec<T: 'static> {
+    pool: &'static VecPool<T>,
     vec: Vec<T>,
 }
 
-impl<'a, T> Drop for PoolVec<'a, T> {
+impl<T> Drop for PoolVec<T> {
     fn drop(&mut self) {
         let mut vec = std::mem::replace(&mut self.vec, Vec::new());
         vec.clear();
-        self.pool.vecs.borrow_mut().push(vec);
+        self.pool.return_vec(vec);
     }
 }
 
-impl<'a, T: Clone> Clone for PoolVec<'a, T> {
+impl<T: Clone> Clone for PoolVec<T> {
     fn clone(&self) -> Self {
         let mut cloned = self.pool.take_vec();
         cloned.vec.extend_from_slice(&self.vec);
@@ -262,26 +287,26 @@ impl<'a, T: Clone> Clone for PoolVec<'a, T> {
     }
 }
 
-impl<'a, T> Deref for PoolVec<'a, T> {
+impl<T> Deref for PoolVec<T> {
     type Target = Vec<T>;
     fn deref(&self) -> &Self::Target {
         &self.vec
     }
 }
 
-impl<'a, T> DerefMut for PoolVec<'a, T> {
+impl<T> DerefMut for PoolVec<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.vec
     }
 }
 
-impl<'a, T: Debug> Debug for PoolVec<'a, T> {
+impl<T: Debug> Debug for PoolVec<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Debug::fmt(self.deref(), f)
     }
 }
 
-impl<'a, T> IntoIterator for PoolVec<'a, T> {
+impl<T> IntoIterator for PoolVec<T> {
     type IntoIter = std::vec::IntoIter<T>;
     type Item = T;
     fn into_iter(mut self) -> Self::IntoIter {
@@ -289,36 +314,35 @@ impl<'a, T> IntoIterator for PoolVec<'a, T> {
     }
 }
 
-impl<'a, T: Hash> Hash for PoolVec<'a, T> {
+impl<T: Hash> Hash for PoolVec<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.vec.hash(state);
     }
 }
 
-impl<'a, T: PartialEq> PartialEq for PoolVec<'a, T> {
+impl<T: PartialEq> PartialEq for PoolVec<T> {
     fn eq(&self, other: &Self) -> bool {
         self.vec == other.vec
     }
 }
 
-impl<'a, T: Eq> Eq for PoolVec<'a, T> {}
+impl<T: Eq> Eq for PoolVec<T> {}
 
-impl<'a, T> PoolVec<'a, T> {
-    pub fn from_vec(pool: &'a VecPool<T>, vec: Vec<T>) -> Self {
+impl<T> PoolVec<T> {
+    pub fn from_vec(pool: &'static VecPool<T>, vec: Vec<T>) -> Self {
         PoolVec { pool, vec }
     }
 }
 
-pub fn bucket_answers_by_response<'pool>(
-    pools: &'pool AllPools<'pool>,
+pub fn bucket_answers_by_response(
     guess: GuessIx,
     possible_answers: &[AnswerIx],
     lut: &ResponseLUT,
-) -> PoolVec<'pool, (ResponseInt, PoolVec<'pool, AnswerIx>)> {
-    let mut out = pools.buckets_pool.take_vec();
+) -> PoolVec<(ResponseInt, PoolVec<AnswerIx>)> {
+    let mut out = BUCKETS_POOL.take_vec();
     for &answer in possible_answers {
         let response = lut[(guess, answer)];
-        alist_get_or_else(&mut out, response, || pools.words_pool.take_vec()).push(answer);
+        alist_get_or_else(&mut out, response, || WORDS_POOL.take_vec()).push(answer);
     }
     out
 }
@@ -330,18 +354,18 @@ pub enum Score {
 }
 
 #[derive(Debug, Clone)]
-pub struct MinimaxTrace<'pool> {
-    pub frames: PoolVec<'pool, MinimaxFrame<'pool>>,
+pub struct MinimaxTrace {
+    pub frames: PoolVec<MinimaxFrame>,
     pub score: Score,
 }
 
-impl<'pool> MinimaxTrace<'pool> {
-    fn push(&mut self, frame: MinimaxFrame<'pool>) {
+impl MinimaxTrace {
+    fn push(&mut self, frame: MinimaxFrame) {
         self.frames.push(frame);
     }
 }
 
-impl<'pool> MinimaxTrace<'pool> {
+impl MinimaxTrace {
     fn hydrate(self, guesses: &[Word], answers: &[Word]) -> HydratedMinimaxTrace {
         let MinimaxTrace { frames, score } = self;
         let frames = frames
@@ -354,13 +378,13 @@ impl<'pool> MinimaxTrace<'pool> {
 }
 
 #[derive(Debug, Clone)]
-pub struct MinimaxFrame<'pool> {
+pub struct MinimaxFrame {
     guess: GuessIx,
     response: ResponseInt,
-    remaining_answers: PoolVec<'pool, AnswerIx>,
+    remaining_answers: PoolVec<AnswerIx>,
 }
 
-impl<'pool> MinimaxFrame<'pool> {
+impl MinimaxFrame {
     fn hydrate(self, guesses: &[Word], answers: &[Word]) -> HydratedMinimaxFrame {
         let MinimaxFrame {
             guess,
@@ -415,31 +439,14 @@ pub struct HydratedMinimaxFrame {
     remaining_answers: Vec<Word>,
 }
 
-fn merge_min<'pool>(min: &mut Option<MinimaxTrace<'pool>>, new: MinimaxTrace<'pool>) {
+fn merge_min(min: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
     let swap = min.as_ref().map_or(true, |min| min.score > new.score);
     if swap {
         min.replace(new);
     }
 }
 
-pub struct AllPools<'pool> {
-    pub buckets_pool: VecPool<(ResponseInt, PoolVec<'pool, AnswerIx>)>,
-    pub words_pool: VecPool<AnswerIx>,
-    pub frames_pool: VecPool<MinimaxFrame<'pool>>,
-}
-
-impl AllPools<'static> {
-    pub fn new() -> &'static Self {
-        Box::leak(Box::new(AllPools {
-            words_pool: VecPool::new(),
-            buckets_pool: VecPool::new(),
-            frames_pool: VecPool::new(),
-        }))
-    }
-}
-
 pub struct Minimaxer {
-    pools: &'static AllPools<'static>,
     lut: ResponseLUT,
     guesses: Vec<Word>,
     answers: Vec<Word>,
@@ -455,7 +462,7 @@ struct MinCacheKey {
 
 #[derive(Clone, Debug)]
 pub enum MinimaxResult {
-    Complete { trace: MinimaxTrace<'static> },
+    Complete { trace: MinimaxTrace },
     Pruned { score: Score },
 }
 
@@ -499,12 +506,10 @@ fn pop_line() {
 
 impl Minimaxer {
     pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
-        let pools = AllPools::new();
         let lut = ResponseLUT::new(&guesses, &answers);
         let guess_ixs: Vec<GuessIx> = (0..guesses.len() as u16).map(|i| GuessIx(i)).collect();
         let answer_ixs: Vec<AnswerIx> = (0..answers.len() as u16).map(|i| AnswerIx(i)).collect();
         Minimaxer {
-            pools,
             lut,
             guesses,
             answers,
@@ -555,7 +560,7 @@ impl Minimaxer {
             let guess = self.guesses[guess.0 as usize];
             println!("################");
             println!("{}/{} ({:#?})", i + start + 1, len, t_start.elapsed());
-            self.pools.words_pool.debug_info();
+            WORDS_POOL.debug_info();
             print!("{}", max_trace);
             out.push((guess, max_trace));
         }
@@ -583,7 +588,6 @@ impl Minimaxer {
         let input = Arc::new(Mutex::new(input.into_iter()));
         for _ in 0..n_threads {
             let Minimaxer {
-                pools: _,
                 lut,
                 guesses,
                 answers,
@@ -599,7 +603,6 @@ impl Minimaxer {
             let input = input.clone();
             thread::spawn(move || {
                 let thread_minimaxer = Minimaxer {
-                    pools: AllPools::new(),
                     lut,
                     guesses,
                     answers,
@@ -655,7 +658,7 @@ impl Minimaxer {
         if possible_answers.len() == 1 {
             return MinimaxResult::Complete {
                 trace: MinimaxTrace {
-                    frames: self.pools.frames_pool.take_vec(),
+                    frames: FRAMES_POOL.take_vec(),
                     score: Score::Complete { depth },
                 },
             };
@@ -663,7 +666,7 @@ impl Minimaxer {
         if remaining_depth == 0 || possible_answers.len() == 1 {
             return MinimaxResult::Complete {
                 trace: MinimaxTrace {
-                    frames: self.pools.frames_pool.take_vec(),
+                    frames: FRAMES_POOL.take_vec(),
                     score: Score::Incomplete {
                         words: possible_answers.len(),
                     },
@@ -777,9 +780,8 @@ impl Minimaxer {
         possible_answers: &[AnswerIx],
         max_max: Option<Score>,
         verbose: bool,
-    ) -> Option<MinimaxTrace<'static>> {
-        let mut possible_responses =
-            bucket_answers_by_response(self.pools, guess, possible_answers, &self.lut);
+    ) -> Option<MinimaxTrace> {
+        let mut possible_responses = bucket_answers_by_response(guess, possible_answers, &self.lut);
         if possible_responses.len() == 1 {
             // Useless guess
             return None;
