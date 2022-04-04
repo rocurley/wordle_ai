@@ -11,7 +11,9 @@ use std::hash::{Hash, Hasher};
 use std::ops::Bound;
 use std::ops::{Deref, DerefMut, Index};
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::Instant;
 pub mod simd_word;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -172,6 +174,7 @@ pub fn check_guess(guess: Word, answer: Word) -> Response {
     Response(out)
 }
 
+#[derive(Clone)]
 pub struct ResponseLUT {
     table: Vec<ResponseInt>,
     n_answers: usize,
@@ -561,6 +564,83 @@ impl Minimaxer {
         dbg!(cache_total_size);
         */
         out
+    }
+    pub fn book_threads(
+        &self,
+        search_depth: usize,
+        verbose: bool,
+        guesses_skipped: &[Word],
+        n_threads: usize,
+    ) -> mpsc::Receiver<(Word, HydratedMinimaxTrace)> {
+        let (book_entry_send, book_entry_recv) = mpsc::channel();
+        let input: Vec<GuessIx> = self
+            .guess_ixs
+            .iter()
+            .copied()
+            .filter(|guess| !guesses_skipped.contains(&self.guesses[guess.0 as usize]))
+            .collect();
+        let input = Arc::new(Mutex::new(input));
+        for _ in 0..n_threads {
+            let Minimaxer {
+                pools: _,
+                lut,
+                guesses,
+                answers,
+                guess_ixs,
+                answer_ixs,
+            } = self;
+            let output = book_entry_send.clone();
+            let lut = lut.clone();
+            let guesses = guesses.clone();
+            let answers = answers.clone();
+            let guess_ixs = guess_ixs.clone();
+            let answer_ixs = answer_ixs.clone();
+            let input = input.clone();
+            thread::spawn(move || {
+                let thread_minimaxer = Minimaxer {
+                    pools: AllPools::new(),
+                    lut,
+                    guesses,
+                    answers,
+                    guess_ixs,
+                    answer_ixs,
+                };
+                (thread_minimaxer).book_thread_worker(search_depth, verbose, &input, output);
+            });
+        }
+        book_entry_recv
+    }
+    fn book_thread_worker(
+        &self,
+        search_depth: usize,
+        verbose: bool,
+        input: &Mutex<Vec<GuessIx>>,
+        output: mpsc::Sender<(Word, HydratedMinimaxTrace)>,
+    ) {
+        loop {
+            let mut guard = input.lock().unwrap();
+            let guess = if let Some(guess) = guard.pop() {
+                guess
+            } else {
+                break;
+            };
+            drop(guard);
+            let mut cache = Cache::new();
+            let max_trace = self
+                .maximize(
+                    &mut cache,
+                    guess,
+                    0,
+                    search_depth,
+                    &self.answer_ixs,
+                    None,
+                    verbose,
+                )
+                .unwrap()
+                .hydrate(&self.guesses, &self.answers);
+            let guess = self.guesses[guess.0 as usize];
+            output.send((guess, max_trace)).unwrap();
+        }
     }
     fn minimize(
         &self,
