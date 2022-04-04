@@ -434,9 +434,9 @@ impl Display for HydratedMinimaxTrace {
 
 #[derive(Debug, Clone)]
 pub struct HydratedMinimaxFrame {
-    guess: Word,
-    response: ResponseInt,
-    remaining_answers: Vec<Word>,
+    pub guess: Word,
+    pub response: ResponseInt,
+    pub remaining_answers: Vec<Word>,
 }
 
 fn merge_min(min: &mut Option<MinimaxTrace>, new: MinimaxTrace) {
@@ -572,7 +572,7 @@ impl Minimaxer {
         out
     }
     pub fn book_threads(
-        &self,
+        self,
         search_depth: usize,
         verbose: bool,
         guesses_skipped: &[Word],
@@ -586,29 +586,12 @@ impl Minimaxer {
             .filter(|guess| !guesses_skipped.contains(&self.guesses[guess.0 as usize]))
             .collect();
         let input = Arc::new(Mutex::new(input.into_iter()));
+        let minimaxer = Arc::new(self);
         for _ in 0..n_threads {
-            let Minimaxer {
-                lut,
-                guesses,
-                answers,
-                guess_ixs,
-                answer_ixs,
-            } = self;
+            let thread_minimaxer = minimaxer.clone();
             let output = book_entry_send.clone();
-            let lut = lut.clone();
-            let guesses = guesses.clone();
-            let answers = answers.clone();
-            let guess_ixs = guess_ixs.clone();
-            let answer_ixs = answer_ixs.clone();
             let input = input.clone();
             thread::spawn(move || {
-                let thread_minimaxer = Minimaxer {
-                    lut,
-                    guesses,
-                    answers,
-                    guess_ixs,
-                    answer_ixs,
-                };
                 (thread_minimaxer).book_thread_worker(search_depth, verbose, &input, output);
             });
         }
