@@ -8,7 +8,7 @@ fn main() {
     let depth = args[1].parse().unwrap();
     let guesses = read_words(&args[2]);
     let answers = read_words(&args[3]);
-    let to_skip = if args.len() >= 3 {
+    let to_skip = if args.len() > 4 {
         read_existing_guesses(&args[4])
     } else {
         Vec::new()

@@ -88,6 +88,14 @@ impl ResponseCell {
             ResponseCell::Wrong => '⬛',
         }
     }
+    fn from_emoji(c: char) -> Option<Self> {
+        match c {
+            '🟩' => Some(ResponseCell::Correct),
+            '🟨' => Some(ResponseCell::Moved),
+            '⬛' => Some(ResponseCell::Wrong),
+            _ => None,
+        }
+    }
     fn from_int(x: u8) -> Option<Self> {
         match x {
             0 => Some(ResponseCell::Correct),
@@ -133,6 +141,17 @@ impl Response {
             x /= 3;
         }
         Response(out)
+    }
+}
+
+impl FromStr for Response {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let cells_opt: Option<Vec<ResponseCell>> =
+            s.chars().map(ResponseCell::from_emoji).collect();
+        let cells = cells_opt.ok_or(())?;
+        Ok(Response(cells.try_into().map_err(|_| ())?))
     }
 }
 
@@ -504,6 +523,11 @@ fn pop_line() {
     print!("\x1b[1F");
 }
 
+#[derive(Debug, Copy, Clone)]
+enum MaximizeAbort {
+    UselessGuess(ResponseInt),
+    Pruned,
+}
 impl Minimaxer {
     pub fn new(answers: Vec<Word>, guesses: Vec<Word>) -> Self {
         let lut = ResponseLUT::new(&guesses, &answers);
@@ -687,15 +711,17 @@ impl Minimaxer {
                 .guess_ixs
                 .iter()
                 .filter_map(|&guess| {
-                    let single_ply = self.maximize(
-                        minimize_cache,
-                        guess,
-                        depth,
-                        1,
-                        possible_answers,
-                        None,
-                        false,
-                    )?;
+                    let single_ply = self
+                        .maximize(
+                            minimize_cache,
+                            guess,
+                            depth,
+                            1,
+                            possible_answers,
+                            None,
+                            false,
+                        )
+                        .ok()?;
                     Some((single_ply.score, guess))
                 })
                 .collect();
@@ -719,7 +745,7 @@ impl Minimaxer {
                 max_max,
                 verbose,
             );
-            if let Some(max_trace) = max_trace {
+            if let Ok(max_trace) = max_trace {
                 if let Some(min_min) = min_min {
                     if max_trace.score <= min_min {
                         let result = MinimaxResult::Pruned {
@@ -763,11 +789,11 @@ impl Minimaxer {
         possible_answers: &[AnswerIx],
         max_max: Option<Score>,
         verbose: bool,
-    ) -> Option<MinimaxTrace> {
+    ) -> Result<MinimaxTrace, MaximizeAbort> {
         let mut possible_responses = bucket_answers_by_response(guess, possible_answers, &self.lut);
         if possible_responses.len() == 1 {
             // Useless guess
-            return None;
+            return Err(MaximizeAbort::UselessGuess(possible_responses[0].0));
         }
         let mut max_trace: Option<MinimaxTrace> = None;
         let len = possible_responses.len();
@@ -801,7 +827,7 @@ impl Minimaxer {
                     if verbose {
                         pop_line();
                     }
-                    return None;
+                    return Err(MaximizeAbort::Pruned);
                 }
             }
             let swap = max_trace
@@ -820,7 +846,93 @@ impl Minimaxer {
         if verbose {
             pop_line();
         }
-        max_trace
+        Ok(max_trace.unwrap())
+    }
+}
+
+pub struct Interactive {
+    minimaxer: Minimaxer,
+    history: Vec<MinimaxFrame>,
+    cache: Cache,
+    book: Option<HashMap<Word, ResponseInt>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum UserError {
+    InvalidWord,
+    InvalidGuess,
+}
+
+pub const SOLVED: ResponseInt = ResponseInt(0);
+impl Interactive {
+    pub fn new(
+        answers: Vec<Word>,
+        guesses: Vec<Word>,
+        book: Option<HashMap<Word, ResponseInt>>,
+    ) -> Self {
+        Interactive {
+            minimaxer: Minimaxer::new(answers, guesses),
+            history: Vec::new(),
+            cache: Cache::new(),
+            book,
+        }
+    }
+    pub fn interact(&mut self, input: &str) -> Result<ResponseInt, UserError> {
+        let guess = Word::from_str(input).map_err(|()| UserError::InvalidWord)?;
+        let guess_ix_raw = self
+            .minimaxer
+            .guesses
+            .iter()
+            .position(|&g| g == guess)
+            .ok_or(UserError::InvalidGuess)?;
+        let guess_ix = GuessIx(guess_ix_raw as u16);
+        let answers = match self.history.last() {
+            None => &self.minimaxer.answer_ixs,
+            Some(last_frame) => &last_frame.remaining_answers,
+        };
+        if let Some(book) = self.book.take() {
+            let response = book[&guess];
+            let answers_bucketed =
+                bucket_answers_by_response(guess_ix, answers, &self.minimaxer.lut);
+            let (_, remaining_answers) = answers_bucketed
+                .into_iter()
+                .find(|(r, _)| *r == response)
+                .expect("Invalid response in book");
+            let frame = MinimaxFrame {
+                remaining_answers,
+                guess: guess_ix,
+                response,
+            };
+            self.history.push(frame);
+            return Ok(response);
+        }
+        let trace = self
+            .minimaxer
+            .maximize(&mut self.cache, guess_ix, 0, 6, answers, None, false);
+        match trace {
+            Ok(mut trace) => {
+                let frame = trace.frames.pop().unwrap();
+                assert_eq!(guess_ix, frame.guess);
+                let response = frame.response;
+                self.history.push(frame);
+                assert_ne!(response, SOLVED);
+                Ok(response)
+            }
+            Err(MaximizeAbort::Pruned) => {
+                panic!("interact top level maximize call should never be pruned")
+            }
+            Err(MaximizeAbort::UselessGuess(response)) => {
+                let mut remaining_answers = WORDS_POOL.take_vec();
+                remaining_answers.extend_from_slice(&answers);
+                let frame = MinimaxFrame {
+                    remaining_answers,
+                    guess: guess_ix,
+                    response,
+                };
+                self.history.push(frame);
+                Ok(response)
+            }
+        }
     }
 }
 
