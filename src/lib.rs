@@ -2,6 +2,7 @@
 #![feature(portable_simd)]
 #![feature(decl_macro)]
 
+use serde::Serialize;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -15,6 +16,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::thread::LocalKey;
 use std::time::Instant;
+use wasm_bindgen::prelude::*;
 pub mod simd_word;
 
 thread_local! {
@@ -48,6 +50,7 @@ impl Letter {
     }
 }
 
+#[wasm_bindgen]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word([Letter; 5]);
 impl Debug for Word {
@@ -114,6 +117,8 @@ impl Debug for ResponseInt {
         Debug::fmt(&Response::from_int(*self), f)
     }
 }
+
+#[wasm_bindgen]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResponseInt(pub u8);
 
@@ -850,6 +855,7 @@ impl Minimaxer {
     }
 }
 
+#[wasm_bindgen]
 pub struct Interactive {
     minimaxer: Minimaxer,
     history: Vec<MinimaxFrame>,
@@ -857,13 +863,42 @@ pub struct Interactive {
     book: Option<HashMap<Word, ResponseInt>>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub enum UserError {
     InvalidWord,
     InvalidGuess,
 }
 
 pub const SOLVED: ResponseInt = ResponseInt(0);
+
+fn words_from_js(words: &JsValue) -> Vec<Word> {
+    let raw: Vec<String> = words.into_serde().unwrap();
+    raw.into_iter().map(|w| w.parse().unwrap()).collect()
+}
+
+#[wasm_bindgen]
+impl Interactive {
+    pub fn new_from_js(answers_js: &JsValue, guesses_js: &JsValue, book_js: &JsValue) -> Self {
+        let book_raw: Option<HashMap<String, String>> = book_js.into_serde().unwrap();
+        let book = book_raw.map(|m| {
+            m.into_iter()
+                .map(|(k, v)| {
+                    let word: Word = k.parse().unwrap();
+                    let response: Response = v.parse().unwrap();
+                    (word, response.as_int())
+                })
+                .collect()
+        });
+        Self::new(words_from_js(answers_js), words_from_js(guesses_js), book)
+    }
+    pub fn interact_js(&mut self, input: &str) -> JsValue {
+        let res = self
+            .interact(input)
+            .map(|response| format!("{:?}", response));
+        JsValue::from_serde(&res).unwrap()
+    }
+}
+
 impl Interactive {
     pub fn new(
         answers: Vec<Word>,

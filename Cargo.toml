@@ -17,6 +17,7 @@ path = "src/bin/count_collisions.rs"
 [lib]
 name = "wordle_ai_lib"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [profile.release]
 debug = true
@@ -32,6 +33,8 @@ path = "benches/crtierion.rs"
 harness = false
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
 
 [dev-dependencies]
 bit-set = "0.5.2"
