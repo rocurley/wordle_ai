@@ -16,10 +16,12 @@
 
       async function run() {
         await init();
+        const words = await (await fetch('./answers.json')).json();
+        const book = await (await fetch('./ansansbook.json')).json();
 
         lib_init();
 
-        console.log(Interactive)
+        console.log(Interactive.new_from_js(words, words, book));
       }
 
       run();

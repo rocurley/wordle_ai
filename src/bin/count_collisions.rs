@@ -2,11 +2,10 @@ use std::collections::HashSet;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use wordle_ai_lib::{
-    bucket_answers_by_response, AllPools, AnswerIx, GuessIx, PoolVec, ResponseLUT, Word,
-};
+use wordle_ai_lib::{bucket_answers_by_response, AnswerIx, GuessIx, PoolVec, ResponseLUT, Word};
 
 fn main() {
+    /*
     let args: Vec<String> = env::args().collect();
     let guesses = read_words(&args[1]);
     let answers = read_words(&args[2]);
@@ -39,6 +38,7 @@ fn main() {
             prior_answers.len() as f64 / undeduped as f64
         );
     }
+    */
 }
 
 fn read_words(path: &str) -> Vec<Word> {

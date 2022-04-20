@@ -2,6 +2,7 @@
 #![feature(portable_simd)]
 #![feature(decl_macro)]
 
+use console_error_panic_hook;
 use serde::Serialize;
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
@@ -30,6 +31,13 @@ static BUCKETS_POOL: VecPool<(ResponseInt, PoolVec<AnswerIx>)> = VecPool(&BUCKET
 static WORDS_POOL: VecPool<AnswerIx> = VecPool(&WORDS_POOL_INNER);
 static FRAMES_POOL: VecPool<MinimaxFrame> = VecPool(&FRAMES_POOL_INNER);
 
+use std::panic;
+
+#[wasm_bindgen]
+pub fn lib_init() {
+    panic::set_hook(Box::new(console_error_panic_hook::hook));
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Letter(u8);
 
@@ -50,7 +58,6 @@ impl Letter {
     }
 }
 
-#[wasm_bindgen]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word([Letter; 5]);
 impl Debug for Word {
@@ -118,7 +125,6 @@ impl Debug for ResponseInt {
     }
 }
 
-#[wasm_bindgen]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ResponseInt(pub u8);
 
@@ -675,7 +681,7 @@ impl Minimaxer {
                 },
             };
         }
-        if remaining_depth == 0 || possible_answers.len() == 1 {
+        if remaining_depth == 0 {
             return MinimaxResult::Complete {
                 trace: MinimaxTrace {
                     frames: FRAMES_POOL.take_vec(),
@@ -1034,6 +1040,20 @@ mod tests {
             let response = Response::from_int(i);
             let i2 = response.as_int();
             assert_eq!(i, i2);
+        }
+    }
+
+    #[test]
+    fn test_linear_search() {
+        let words: Vec<Word> = (0..26)
+            .into_iter()
+            .map(|x| Word([Letter(x), Letter(x), Letter(x), Letter(x), Letter(x)]))
+            .collect();
+        for i in 1..26 {
+            let answers = words[0..i].to_vec();
+            let minimaxer = Minimaxer::new(answers, words.clone());
+            let res = minimaxer.run(27, false);
+            assert_eq!(res.score, Score::Complete { depth: i - 1 });
         }
     }
 }
